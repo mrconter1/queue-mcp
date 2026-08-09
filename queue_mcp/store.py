@@ -306,6 +306,82 @@ def sessions() -> list[dict[str, Any]]:
     return sorted(out, key=lambda s: s["updated"], reverse=True)
 
 
+def _parse_when(value: str | None, end_of_day: bool = False) -> datetime | None:
+    """Accept a bare date or a full ISO timestamp, always tz-aware."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"unparseable date {value!r}: use YYYY-MM-DD or an ISO timestamp") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    # "until 2026-08-09" should include that whole day, not stop at midnight.
+    if end_of_day and len(value.strip()) == 10:
+        parsed = parsed.replace(hour=23, minute=59, second=59)
+    return parsed
+
+
+def history(
+    session_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    outcome: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Everything that has left a queue, newest first.
+
+    ``session_id`` defaults to every session, which is the point: the per-session
+    files cannot answer "what have we processed". Counts and totals describe the
+    whole match, not just the page returned by ``limit``.
+    """
+    start = _parse_when(since)
+    end = _parse_when(until, end_of_day=True)
+
+    matched: list[dict[str, Any]] = []
+    if HISTORY.exists():
+        for line in HISTORY.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # one bad line must not hide the rest of the log
+            if session_id and record.get("session_id") != session_id:
+                continue
+            if outcome and record.get("outcome") != outcome:
+                continue
+            if start or end:
+                stamp = record.get("recorded") or record.get("finished")
+                try:
+                    when = datetime.fromisoformat(stamp) if stamp else None
+                except ValueError:
+                    when = None
+                if when is None:
+                    continue
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                if start and when < start:
+                    continue
+                if end and when > end:
+                    continue
+            matched.append(record)
+
+    matched.reverse()
+    counts: dict[str, int] = {}
+    for record in matched:
+        key = record.get("outcome") or "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        "records": matched[:limit],
+        "counts": counts,
+        "total": len(matched),
+        "total_duration_seconds": sum(r.get("duration_seconds") or 0 for r in matched),
+        "truncated": len(matched) > limit,
+    }
+
+
 def last_session() -> str | None:
     if LAST_SESSION.exists():
         value = LAST_SESSION.read_text(encoding="utf-8").strip()

@@ -28,7 +28,9 @@ server = MCPServer(
         "queue_next to claim the next item, do the work (spawn a forked "
         "subagent when the item's mode is 'fork'), then call queue_complete "
         "before claiming the next. Stop when queue_next returns nothing. "
-        "Always pass the current Claude Code session id as session_id."
+        "Always pass the current Claude Code session id as session_id. "
+        "queue_history answers what has already been processed, across all "
+        "sessions, including items that were dropped before they ran."
     ),
 )
 
@@ -122,6 +124,29 @@ def queue_clear(session_id: str, finished_only: bool = True) -> dict[str, Any]:
     try:
         return _ok(removed=store.clear(session_id, finished_only))
     except (ValueError, TimeoutError) as exc:
+        return _err(str(exc))
+
+
+@server.tool()
+def queue_history(
+    session_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    outcome: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """What has actually been processed, newest first.
+
+    Spans every session unless session_id is given. Each record carries the
+    item, its outcome ('done', 'failed' or 'dropped'), when it was queued,
+    started and finished, a computed duration_seconds and the result summary.
+    since/until accept a bare YYYY-MM-DD or a full ISO timestamp, and until
+    includes the whole of that day. counts and totals describe the full match,
+    not just the page returned by limit.
+    """
+    try:
+        return _ok(**store.history(session_id, since, until, outcome, limit))
+    except ValueError as exc:
         return _err(str(exc))
 
 
