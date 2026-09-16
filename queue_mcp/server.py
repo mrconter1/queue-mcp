@@ -111,6 +111,15 @@ def queue_remove(session_id: str, item_id: int) -> dict[str, Any]:
 
 
 @server.tool()
+def queue_edit(session_id: str, item_id: int, text: str | None = None, mode: str | None = None) -> dict[str, Any]:
+    """Reword a queued item, or change how it runs. Finished items cannot be edited."""
+    try:
+        return _ok(item=store.edit(session_id, item_id, text, mode))
+    except (KeyError, ValueError, TimeoutError) as exc:
+        return _err(str(exc))
+
+
+@server.tool()
 def queue_move(session_id: str, item_id: int, position: int) -> dict[str, Any]:
     """Reorder an item; position 0 puts it next."""
     try:

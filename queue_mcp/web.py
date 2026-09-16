@@ -19,6 +19,7 @@ from typing import Any
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
+from urllib.parse import urlparse
 
 from queue_mcp import store
 
@@ -54,6 +55,48 @@ def _state(session_id: str | None) -> dict[str, Any]:
     return {"sessions": sessions, **store.listing(chosen, include_finished=True)}
 
 
+def _from_the_board(request: Request) -> bool:
+    """Whether a write really came from this page, and not from another site.
+
+    The board answers on a loopback port, which any page in the browser can
+    post to. Two cheap checks stop that: a cross-origin form post cannot set a
+    JSON content type without a preflight the server never answers, and an
+    Origin, when the browser sends one, has to be this server.
+    """
+    content_type = request.headers.get("content-type", "")
+    if not content_type.startswith("application/json"):
+        return False
+    origin = request.headers.get("origin")
+    if origin is None:
+        return True  # same-origin fetches often omit it; a form post cannot get this far
+    host = urlparse(origin).hostname
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+async def _body(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise ValueError("expected a JSON body")
+    if not isinstance(payload, dict):
+        raise ValueError("expected a JSON object")
+    return payload
+
+
+def _session_of(payload: dict[str, Any]) -> str:
+    session_id = payload.get("session")
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("which queue? pass session")
+    return session_id
+
+
+def _item_of(payload: dict[str, Any]) -> int:
+    try:
+        return int(payload["id"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("which item? pass id") from None
+
+
 def attach(server: Any) -> None:
     """Add the board's routes to an MCP server instance."""
 
@@ -67,6 +110,55 @@ def attach(server: Any) -> None:
             return JSONResponse(_state(request.query_params.get("session")), headers=NO_STORE)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400, headers=NO_STORE)
+
+    async def _write(request: Request, apply) -> Response:
+        """Run one change and answer with the queue as it now stands.
+
+        The whole state comes back from every write, so the page redraws from
+        the server's answer rather than from what it guessed would happen - the
+        session it is watching may have claimed an item in the same moment.
+        """
+        if not _from_the_board(request):
+            return JSONResponse({"error": "not from the board"}, status_code=403, headers=NO_STORE)
+        try:
+            payload = await _body(request)
+            session_id = _session_of(payload)
+            apply(session_id, payload)
+            return JSONResponse(_state(session_id), headers=NO_STORE)
+        except (KeyError, ValueError, TimeoutError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400, headers=NO_STORE)
+
+    @server.custom_route("/api/add", methods=["POST"])
+    async def add(request: Request) -> Response:
+        return await _write(request, lambda session, body: store.add(
+            session,
+            str(body.get("text", "")),
+            str(body.get("mode", "inline")),
+            body.get("position"),
+        ))
+
+    @server.custom_route("/api/edit", methods=["POST"])
+    async def edit(request: Request) -> Response:
+        return await _write(request, lambda session, body: store.edit(
+            session,
+            _item_of(body),
+            body.get("text"),
+            body.get("mode"),
+        ))
+
+    @server.custom_route("/api/remove", methods=["POST"])
+    async def remove(request: Request) -> Response:
+        return await _write(request, lambda session, body: store.remove(session, _item_of(body)))
+
+    @server.custom_route("/api/reorder", methods=["POST"])
+    async def reorder(request: Request) -> Response:
+        def apply(session: str, body: dict[str, Any]) -> None:
+            ids = body.get("ids")
+            if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+                raise ValueError("pass ids as a list of item ids, in the order you want them")
+            store.reorder(session, ids)
+
+        return await _write(request, apply)
 
     # Browsers ask for this unprompted; answering plainly keeps the log readable.
     @server.custom_route("/favicon.ico", methods=["GET"])

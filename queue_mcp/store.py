@@ -254,6 +254,63 @@ def remove(session_id: str, item_id: int) -> dict[str, Any]:
         return item
 
 
+def edit(session_id: str, item_id: int, text: str | None = None, mode: str | None = None) -> dict[str, Any]:
+    """Change an item's wording, or which way it runs.
+
+    Only while it is still in the queue. A finished item has already been
+    written to history exactly as it was, and rewriting the queue copy would
+    leave the two disagreeing about what was actually done.
+    """
+    with _lock(session_id):
+        data = _read(session_id)
+        item = _find(data, item_id)
+        if item["status"] in (DONE, FAILED):
+            raise ValueError("finished items are history; they cannot be edited")
+        if text is not None:
+            cleaned = text.strip()
+            if not cleaned:
+                raise ValueError("queue items need text")
+            item["text"] = cleaned
+        if mode is not None:
+            if mode not in ("fork", "inline"):
+                raise ValueError("mode must be 'fork' or 'inline'")
+            item["mode"] = mode
+        _write(session_id, data)
+        return item
+
+
+def reorder(session_id: str, ids: list[int]) -> list[int]:
+    """Put the pending items in exactly this order.
+
+    The whole order at once, rather than one move at a time, because that is
+    what a drag on the board produces and it cannot half-apply. The ids must be
+    exactly the pending ones: if the queue has moved on since the page drew it -
+    an item claimed, added or dropped meanwhile - the reorder is refused rather
+    than applied to a queue the user was not looking at.
+
+    Finished and running items keep their places; only the pending slots are
+    filled in the new order.
+    """
+    with _lock(session_id):
+        data = _read(session_id)
+        pending = [i for i in data["items"] if i["status"] == PENDING]
+        by_id = {i["id"]: i for i in pending}
+        if sorted(ids) != sorted(by_id):
+            raise ValueError("the queue changed while you were dragging; it was left as it is")
+        wanted = [by_id[i] for i in ids]
+        fresh: list[dict[str, Any]] = []
+        taken = 0
+        for item in data["items"]:
+            if item["status"] == PENDING:
+                fresh.append(wanted[taken])
+                taken += 1
+            else:
+                fresh.append(item)
+        data["items"] = fresh
+        _write(session_id, data)
+        return [i["id"] for i in wanted]
+
+
 def move(session_id: str, item_id: int, position: int) -> dict[str, Any]:
     with _lock(session_id):
         data = _read(session_id)

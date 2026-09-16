@@ -12,6 +12,7 @@
     color-scheme: light dark;
     --bg: #f6f7f9;
     --surface: #ffffff;
+    --raised: #f0f2f6;
     --border: #e2e5ea;
     --border-strong: #c9ced6;
     --text: #1c2430;
@@ -27,6 +28,7 @@
     :root {
         --bg: #14171c;
         --surface: #1b1f26;
+        --raised: #232832;
         --border: #2a2f38;
         --border-strong: #3a414c;
         --text: #e8eaed;
@@ -67,16 +69,42 @@ h1 {
 
 .spacer { flex: 1 1 auto; }
 
-select {
-    max-width: 320px;
-    padding: 5px 8px;
+select, input[type="text"], textarea {
+    padding: 6px 8px;
     border: 1px solid var(--border-strong);
     border-radius: 6px;
     background: var(--surface);
     color: var(--text);
     font: inherit;
-    font-size: 0.82rem;
 }
+
+header.top select { max-width: 340px; font-size: 0.82rem; }
+
+button {
+    padding: 6px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+button:hover { background: var(--raised); }
+
+button.primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+}
+
+button.primary:hover { filter: brightness(1.06); }
+
+/* Adding: one line, at the head of the list it adds to. */
+form.add { display: flex; gap: 8px; margin-bottom: 10px; }
+
+form.add input[type="text"] { flex: 1 1 auto; }
 
 .counts {
     display: flex;
@@ -138,6 +166,23 @@ li.item:last-child { border-bottom: 1px solid var(--border); border-radius: 0 0 
 
 li.item:only-child { border-radius: var(--radius); }
 
+li.item.dragging { opacity: 0.4; }
+
+/* Where the dragged row would land. */
+li.item.over { box-shadow: inset 0 2px 0 0 var(--accent); }
+
+li.item.over-below { box-shadow: inset 0 -2px 0 0 var(--accent); }
+
+.grip {
+    color: var(--border-strong);
+    cursor: grab;
+    user-select: none;
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+li.item:hover .grip { color: var(--muted); }
+
 .pos {
     min-width: 1.6em;
     color: var(--muted);
@@ -162,6 +207,40 @@ li.item:only-child { border-radius: var(--radius); }
     font-size: 0.68rem;
     white-space: nowrap;
 }
+
+li.item .text[data-edit] { cursor: text; }
+
+/* Row controls: present but quiet, and only once the row is under the pointer,
+   so twenty rows do not read as forty buttons. */
+.row-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 90ms ease; }
+
+li.item:hover .row-actions,
+li.item:focus-within .row-actions { opacity: 1; }
+
+.row-actions button { padding: 2px 7px; font-size: 0.78rem; line-height: 1.4; }
+
+.row-actions button.drop:hover { border-color: var(--bad); color: var(--bad); }
+
+/* Editing happens in the row, so the queue keeps its shape while it is done. */
+.editor { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; }
+
+.editor textarea { width: 100%; min-height: 62px; resize: vertical; }
+
+.editor .buttons { display: flex; gap: 6px; align-items: center; }
+
+.editor .hint { color: var(--muted); font-size: 0.75rem; }
+
+#error {
+    display: none;
+    margin: 12px 0 0;
+    padding: 8px 12px;
+    border: 1px solid var(--bad);
+    border-radius: 6px;
+    color: var(--bad);
+    font-size: 0.85rem;
+}
+
+#error.shown { display: block; }
 
 .done .text { color: var(--muted); }
 
@@ -207,6 +286,8 @@ footer {
         <span class="counts" id="counts"></span>
     </header>
 
+    <p id="error" role="alert"></p>
+
     <section>
         <h2>Now</h2>
         <div id="now"></div>
@@ -214,6 +295,14 @@ footer {
 
     <section>
         <h2>Next <span class="n" id="next-count"></span></h2>
+        <form class="add" id="add">
+            <input type="text" id="add-text" placeholder="Add a task to the end of the queue" autocomplete="off">
+            <select id="add-mode" aria-label="How it runs">
+                <option value="inline">inline</option>
+                <option value="fork">fork</option>
+            </select>
+            <button type="submit" class="primary">Add</button>
+        </form>
         <div id="next"></div>
     </section>
 
@@ -250,6 +339,11 @@ const remember = (id) => {
 let chosen = new URLSearchParams(location.search).get("session") || remembered();
 let lastSeen = 0;
 let running = null;
+let pending = [];
+/** The item open in an editor, and the row being dragged: while either is set
+    the list is left alone, so a poll cannot pull the ground from under it. */
+let editing = null;
+let dragging = null;
 
 const escape = (value) => String(value ?? "").replace(/[&<>"]/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]
@@ -264,6 +358,41 @@ const since = (stamp) => {
     if (minutes < 60) { return `${minutes}m ${seconds % 60}s`; }
     const hours = Math.floor(minutes / 60);
     return `${hours}h ${minutes % 60}m`;
+};
+
+const showError = (message) => {
+    const box = el("error");
+    box.textContent = message;
+    box.classList.toggle("shown", Boolean(message));
+};
+
+/**
+ * Every change goes through here: post it, then draw what came back. The whole
+ * state is the answer to a write, so the page never renders what it assumed
+ * would happen - the session being watched may have claimed an item in the
+ * same moment.
+ */
+const change = async (path, body) => {
+    try {
+        const response = await fetch(path, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session: chosen, ...body })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            showError(payload.error || response.statusText);
+            await poll();
+            return false;
+        }
+        showError("");
+        render(payload);
+        lastSeen = Date.now();
+        return true;
+    } catch {
+        showError("Cannot reach the queue server.");
+        return false;
+    }
 };
 
 const shortSession = (id) => (id && id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id || "");
@@ -312,19 +441,50 @@ const drawNow = (item) => {
         </div>`;
 };
 
+const rowHtml = (item, index) => `
+    <li class="item" draggable="true" data-id="${item.id}">
+        <span class="grip" aria-hidden="true">&#8942;&#8942;</span>
+        <span class="pos">${index + 1}</span>
+        <span class="id">#${item.id}</span>
+        <span class="text" data-edit="${item.id}" title="Click to edit">${escape(item.text)}</span>
+        ${item.mode === "fork" ? '<span class="badge">fork</span>' : ""}
+        <span class="row-actions">
+            <button type="button" data-edit="${item.id}" title="Edit this task">Edit</button>
+            <button type="button" class="drop" data-remove="${item.id}" title="Remove from the queue">&times;</button>
+        </span>
+    </li>`;
+
+const editorHtml = (item, index) => `
+    <li class="item" data-id="${item.id}">
+        <span class="pos">${index + 1}</span>
+        <span class="id">#${item.id}</span>
+        <span class="editor">
+            <textarea id="edit-text">${escape(item.text)}</textarea>
+            <span class="buttons">
+                <button type="button" class="primary" data-save="${item.id}">Save</button>
+                <button type="button" data-cancel="1">Cancel</button>
+                <span class="hint">Enter saves, Shift+Enter for a new line, Esc cancels</span>
+            </span>
+        </span>
+    </li>`;
+
 const drawNext = (items) => {
+    pending = items;
     el("next-count").textContent = items.length ? `(${items.length})` : "";
     if (!items.length) {
         el("next").innerHTML = '<div class="idle">Queue empty.</div>';
         return;
     }
-    el("next").innerHTML = "<ol class='items'>" + items.map((item, i) => `
-        <li class="item">
-            <span class="pos">${i + 1}</span>
-            <span class="id">#${item.id}</span>
-            <span class="text">${escape(item.text)}</span>
-            ${item.mode === "fork" ? '<span class="badge">fork</span>' : ""}
-        </li>`).join("") + "</ol>";
+    el("next").innerHTML = "<ol class='items'>"
+        + items.map((item, i) => (item.id === editing ? editorHtml(item, i) : rowHtml(item, i))).join("")
+        + "</ol>";
+    if (editing !== null) {
+        const box = el("edit-text");
+        if (box) {
+            box.focus();
+            box.setSelectionRange(box.value.length, box.value.length);
+        }
+    }
 };
 
 const drawFinished = (items) => {
@@ -370,6 +530,8 @@ const drawFooter = (failed) => {
 };
 
 const poll = async () => {
+    // A poll in the middle of a drag would rebuild the row under the pointer.
+    if (dragging !== null) { return; }
     try {
         const response = await fetch(`/api/state${chosen ? `?session=${encodeURIComponent(chosen)}` : ""}`);
         if (!response.ok) { throw new Error(response.statusText); }
@@ -381,9 +543,123 @@ const poll = async () => {
     }
 };
 
+// --- changing the queue -------------------------------------------------------
+
+el("add").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const box = el("add-text");
+    const text = box.value.trim();
+    if (!text) { return; }
+    if (await change("/api/add", { text, mode: el("add-mode").value })) {
+        box.value = "";
+    }
+    box.focus();
+});
+
+const saveEdit = async () => {
+    const box = el("edit-text");
+    if (!box || editing === null) { return; }
+    const id = editing;
+    const text = box.value.trim();
+    editing = null;
+    // Emptying the box is not a way to delete a task; that is what the x is for.
+    if (text) { await change("/api/edit", { id, text }); } else { await poll(); }
+};
+
+const cancelEdit = async () => {
+    editing = null;
+    await poll();
+};
+
+el("next").addEventListener("click", async (event) => {
+    const target = event.target.closest("[data-edit], [data-remove], [data-save], [data-cancel]");
+    if (!target) { return; }
+    if (target.dataset.remove) {
+        await change("/api/remove", { id: Number(target.dataset.remove) });
+    } else if (target.dataset.save) {
+        await saveEdit();
+    } else if (target.dataset.cancel) {
+        await cancelEdit();
+    } else if (target.dataset.edit) {
+        editing = Number(target.dataset.edit);
+        drawNext(pending);
+    }
+});
+
+el("next").addEventListener("keydown", async (event) => {
+    if (editing === null) { return; }
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        await saveEdit();
+    } else if (event.key === "Escape") {
+        event.preventDefault();
+        await cancelEdit();
+    }
+});
+
+// --- dragging to reorder ------------------------------------------------------
+
+const rowAt = (event) => event.target.closest("li.item[data-id]");
+
+/** Which row the pointer is over, and which half of it. */
+const dropAt = (event) => {
+    const row = rowAt(event);
+    if (!row) { return null; }
+    const box = row.getBoundingClientRect();
+    return { id: Number(row.dataset.id), below: event.clientY > box.top + box.height / 2 };
+};
+
+const clearMarks = () => {
+    el("next").querySelectorAll("li.item").forEach((row) => row.classList.remove("over", "over-below"));
+};
+
+el("next").addEventListener("dragstart", (event) => {
+    const row = rowAt(event);
+    if (!row || editing !== null) { return; }
+    dragging = Number(row.dataset.id);
+    row.classList.add("dragging");
+    event.dataTransfer.effectAllowed = "move";
+    // Firefox starts a drag only when something has been set on it.
+    event.dataTransfer.setData("text/plain", row.dataset.id);
+});
+
+el("next").addEventListener("dragover", (event) => {
+    if (dragging === null) { return; }
+    event.preventDefault();
+    const row = rowAt(event);
+    if (!row) { return; }
+    clearMarks();
+    const box = row.getBoundingClientRect();
+    row.classList.add(event.clientY > box.top + box.height / 2 ? "over-below" : "over");
+});
+
+el("next").addEventListener("drop", async (event) => {
+    if (dragging === null) { return; }
+    event.preventDefault();
+    const target = dropAt(event);
+    const held = dragging;
+    dragging = null;
+    clearMarks();
+    if (target === null || target.id === held) { await poll(); return; }
+    // The order the server is given is the whole pending order, so it either
+    // takes the list the user is looking at or refuses it as stale.
+    const ids = pending.map((item) => item.id).filter((id) => id !== held);
+    const at = ids.indexOf(target.id) + (target.below ? 1 : 0);
+    ids.splice(at < 0 ? ids.length : at, 0, held);
+    await change("/api/reorder", { ids });
+});
+
+el("next").addEventListener("dragend", async () => {
+    if (dragging === null) { return; }
+    dragging = null;
+    clearMarks();
+    await poll();
+});
+
 el("session").addEventListener("change", (event) => {
     chosen = event.target.value;
     remember(chosen);
+    editing = null;
     // The queue in view belongs in the URL, so a tab can be left on one.
     const url = new URL(location.href);
     url.searchParams.set("session", chosen);
