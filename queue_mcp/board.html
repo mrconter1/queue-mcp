@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Queue</title>
+<style>
+/* A local tool, read at a glance from across the desk: one column, generous
+   type, and colour used only where it means something - what is running now,
+   and what failed. */
+:root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --border: #e2e5ea;
+    --border-strong: #c9ced6;
+    --text: #1c2430;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eef3ff;
+    --good: #067647;
+    --bad: #b42318;
+    --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #14171c;
+        --surface: #1b1f26;
+        --border: #2a2f38;
+        --border-strong: #3a414c;
+        --text: #e8eaed;
+        --muted: #9aa3b0;
+        --accent: #6f9bff;
+        --accent-soft: #1d2739;
+        --good: #4ade80;
+        --bad: #f87171;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 24px 20px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+}
+
+main { max-width: 900px; margin: 0 auto; }
+
+header.top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+h1 {
+    margin: 0;
+    font-size: 1.35rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+}
+
+.spacer { flex: 1 1 auto; }
+
+select {
+    max-width: 320px;
+    padding: 5px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.82rem;
+}
+
+.counts {
+    display: flex;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--muted);
+}
+
+.count strong { color: var(--text); font-weight: 600; }
+
+h2 {
+    margin: 26px 0 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+h2 .n { font-weight: 500; letter-spacing: 0; text-transform: none; }
+
+/* What is being worked on right now: the one thing on the page that is
+   allowed to shout. */
+.now {
+    border: 1px solid var(--accent);
+    border-left-width: 4px;
+    border-radius: var(--radius);
+    background: var(--accent-soft);
+    padding: 14px 16px;
+}
+
+.now .text { font-size: 1.02rem; font-weight: 550; }
+
+.now .meta { margin-top: 6px; font-size: 0.8rem; color: var(--muted); }
+
+.idle {
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+ol.items { list-style: none; margin: 0; padding: 0; }
+
+li.item {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-bottom: 0;
+    background: var(--surface);
+}
+
+li.item:first-child { border-radius: var(--radius) var(--radius) 0 0; }
+
+li.item:last-child { border-bottom: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
+
+li.item:only-child { border-radius: var(--radius); }
+
+.pos {
+    min-width: 1.6em;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.82rem;
+    text-align: right;
+}
+
+.id {
+    color: var(--muted);
+    font-size: 0.74rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.text { flex: 1 1 auto; overflow-wrap: anywhere; }
+
+.badge {
+    padding: 1px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 0.68rem;
+    white-space: nowrap;
+}
+
+.done .text { color: var(--muted); }
+
+.mark { font-weight: 700; font-size: 0.8rem; }
+
+.mark.ok { color: var(--good); }
+
+.mark.bad { color: var(--bad); }
+
+.result {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+}
+
+details.finished summary {
+    cursor: pointer;
+    margin: 26px 0 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+details.finished summary .n { font-weight: 500; letter-spacing: 0; text-transform: none; }
+
+footer {
+    margin-top: 28px;
+    color: var(--muted);
+    font-size: 0.76rem;
+}
+
+.stale { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+    <header class="top">
+        <h1>Queue</h1>
+        <select id="session" aria-label="Which queue"></select>
+        <span class="spacer"></span>
+        <span class="counts" id="counts"></span>
+    </header>
+
+    <section>
+        <h2>Now</h2>
+        <div id="now"></div>
+    </section>
+
+    <section>
+        <h2>Next <span class="n" id="next-count"></span></h2>
+        <div id="next"></div>
+    </section>
+
+    <details class="finished" id="finished-wrap">
+        <summary>Finished <span class="n" id="finished-count"></span></summary>
+        <div id="finished"></div>
+    </details>
+
+    <footer id="footer"></footer>
+</main>
+
+<script>
+"use strict";
+
+/**
+ * The board polls the server and redraws. State lives on the server - the
+ * same files the MCP tools read - so the page holds nothing of its own except
+ * which queue is in view and when it last heard back.
+ */
+const POLL_MS = 1500;
+const el = (id) => document.getElementById(id);
+
+// Which queue is in view: the URL wins, so a tab can be left on one queue;
+// otherwise the last one picked here, because this machine runs several Claude
+// sessions at once and the newest queue with work is not always the wanted one.
+const REMEMBERED = "queue-board-session";
+const remembered = () => {
+    try { return localStorage.getItem(REMEMBERED) || ""; } catch { return ""; }
+};
+const remember = (id) => {
+    try { localStorage.setItem(REMEMBERED, id); } catch { /* private window: the URL still works */ }
+};
+
+let chosen = new URLSearchParams(location.search).get("session") || remembered();
+let lastSeen = 0;
+let running = null;
+
+const escape = (value) => String(value ?? "").replace(/[&<>"]/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]
+));
+
+/** A count of seconds as a person would say it. */
+const since = (stamp) => {
+    if (!stamp) { return ""; }
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(stamp).getTime()) / 1000));
+    if (seconds < 60) { return `${seconds}s`; }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) { return `${minutes}m ${seconds % 60}s`; }
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+};
+
+const shortSession = (id) => (id && id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id || "");
+
+/** One line in the picker: what is in that queue, and how long ago it moved. */
+const sessionLabel = (session) => {
+    const parts = [];
+    if (session.in_progress) { parts.push("running"); }
+    if (session.pending) { parts.push(`${session.pending} pending`); }
+    if (!parts.length) { parts.push(`${session.total} done`); }
+    return `${shortSession(session.session_id)} - ${parts.join(", ")} - ${since(session.updated)} ago`;
+};
+
+const drawSessions = (sessions, current) => {
+    const picker = el("session");
+    // Rebuilding the options on every poll would close the dropdown under the
+    // pointer, so it is only redrawn when the set of queues actually changes.
+    const signature = sessions.map((s) => `${s.session_id}:${s.pending}:${s.in_progress}`).join("|") + `#${current}`;
+    if (picker.dataset.signature === signature) { return; }
+    picker.dataset.signature = signature;
+    if (!sessions.length) {
+        picker.innerHTML = '<option value="">no queues yet</option>';
+        return;
+    }
+    // This machine accumulates a queue per Claude session, and almost all of
+    // them are finished history. The ones with work come first, under their
+    // own heading, so the live one is never hunted for.
+    const group = (title, list) => (list.length ? `<optgroup label="${escape(title)}">` + list.map((s) => `
+        <option value="${escape(s.session_id)}"${s.session_id === current ? " selected" : ""}>${escape(sessionLabel(s))}</option>`
+    ).join("") + "</optgroup>" : "");
+    const live = sessions.filter((s) => s.pending || s.in_progress);
+    const rest = sessions.filter((s) => !s.pending && !s.in_progress);
+    picker.innerHTML = group("With work", live) + group("Finished", rest);
+};
+
+const drawNow = (item) => {
+    running = item;
+    if (!item) {
+        el("now").innerHTML = '<div class="idle">Nothing running. The next item starts when the session claims it.</div>';
+        return;
+    }
+    el("now").innerHTML = `
+        <div class="now">
+            <div class="text">${escape(item.text)}</div>
+            <div class="meta"><span class="id">#${item.id}</span> &middot; running <span id="elapsed">${since(item.started)}</span>${item.mode === "fork" ? " &middot; fork" : ""}</div>
+        </div>`;
+};
+
+const drawNext = (items) => {
+    el("next-count").textContent = items.length ? `(${items.length})` : "";
+    if (!items.length) {
+        el("next").innerHTML = '<div class="idle">Queue empty.</div>';
+        return;
+    }
+    el("next").innerHTML = "<ol class='items'>" + items.map((item, i) => `
+        <li class="item">
+            <span class="pos">${i + 1}</span>
+            <span class="id">#${item.id}</span>
+            <span class="text">${escape(item.text)}</span>
+            ${item.mode === "fork" ? '<span class="badge">fork</span>' : ""}
+        </li>`).join("") + "</ol>";
+};
+
+const drawFinished = (items) => {
+    // Newest first: what just happened is what a reader is looking for.
+    const recent = items.slice().reverse();
+    el("finished-count").textContent = recent.length ? `(${recent.length})` : "";
+    el("finished").innerHTML = recent.length ? "<ol class='items'>" + recent.map((item) => `
+        <li class="item done">
+            <span class="mark ${item.status === "failed" ? "bad" : "ok"}">${item.status === "failed" ? "!" : "x"}</span>
+            <span class="id">#${item.id}</span>
+            <span class="text">${escape(item.text)}
+                ${item.result ? `<div class="result">${escape(item.result)}</div>` : ""}
+            </span>
+        </li>`).join("") + "</ol>" : '<div class="idle">Nothing finished in this queue yet.</div>';
+};
+
+const drawCounts = (counts) => {
+    const part = (label, value) => `<span class="count"><strong>${value || 0}</strong> ${label}</span>`;
+    el("counts").innerHTML = [
+        part("pending", counts.pending),
+        part("done", counts.done),
+        counts.failed ? part("failed", counts.failed) : ""
+    ].filter(Boolean).join(" &middot; ");
+};
+
+const render = (state) => {
+    chosen = state.session_id || "";
+    drawSessions(state.sessions || [], chosen);
+    drawCounts(state.counts || {});
+    const items = state.items || [];
+    drawNow(items.find((i) => i.status === "in_progress") || null);
+    drawNext(items.filter((i) => i.status === "pending"));
+    drawFinished(items.filter((i) => i.status === "done" || i.status === "failed"));
+};
+
+const drawFooter = (failed) => {
+    const foot = el("footer");
+    if (failed) {
+        foot.innerHTML = '<span class="stale">Cannot reach the queue server. Is it still running?</span>';
+        return;
+    }
+    foot.textContent = `Updated ${since(new Date(lastSeen).toISOString())} ago`;
+};
+
+const poll = async () => {
+    try {
+        const response = await fetch(`/api/state${chosen ? `?session=${encodeURIComponent(chosen)}` : ""}`);
+        if (!response.ok) { throw new Error(response.statusText); }
+        render(await response.json());
+        lastSeen = Date.now();
+        drawFooter(false);
+    } catch {
+        drawFooter(true);
+    }
+};
+
+el("session").addEventListener("change", (event) => {
+    chosen = event.target.value;
+    remember(chosen);
+    // The queue in view belongs in the URL, so a tab can be left on one.
+    const url = new URL(location.href);
+    url.searchParams.set("session", chosen);
+    history.replaceState(null, "", url);
+    void poll();
+});
+
+// The elapsed time ticks between polls, so the page never looks frozen.
+setInterval(() => {
+    const clock = el("elapsed");
+    if (clock && running) { clock.textContent = since(running.started); }
+    drawFooter(false);
+}, 1000);
+
+void poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>

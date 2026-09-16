@@ -17,7 +17,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from queue_mcp import store
+from queue_mcp import store, web
 
 HOST = os.environ.get("QUEUE_MCP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("QUEUE_MCP_PORT", "8766"))
@@ -157,8 +157,14 @@ def queue_sessions() -> dict[str, Any]:
     return _ok(sessions=store.sessions(), last=store.last_session())
 
 
+# The board rides on the same app, so there is one process and one port: the
+# tools answer on /mcp, a browser gets the queue on /.
+web.attach(server)
+
+
 def main() -> None:
     print(f"queue-mcp listening on http://{HOST}:{PORT}/mcp  (data: {store.ROOT})")
+    print(f"           board on http://{HOST}:{PORT}/")
     # The selector loop, not ``server.run``: Python's default Windows loop, the
     # Proactor, closes its listening socket when a client resets a connection
     # before the accept completes (WinError 64), and the process then lives on
