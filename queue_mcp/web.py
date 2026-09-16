@@ -14,20 +14,31 @@ holding the queue.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import time
 from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from urllib.parse import urlparse
 
 from queue_mcp import store
 
 BOARD = Path(__file__).with_name("board.html")
 
-# The board polls; nothing it fetches may be answered from a cache, or it would
-# show a queue that has already moved on.
+# Nothing the board fetches may be answered from a cache, or it would show a
+# queue that has already moved on.
 NO_STORE = {"Cache-Control": "no-store"}
+
+# Server-sent events are separated by a blank line; nothing reaches the page
+# until one is written.
+SEPARATOR = "\n\n"
+
+# How often the stream says it is alive while the queue is quiet. The page calls
+# the connection dead at a little over twice this.
+BEAT_SECONDS = 15
 
 
 def _default_session(sessions: list[dict[str, Any]]) -> str | None:
@@ -159,6 +170,42 @@ def attach(server: Any) -> None:
             store.reorder(session, ids)
 
         return await _write(request, apply)
+
+    @server.custom_route("/api/events", methods=["GET"])
+    async def events(request: Request) -> Response:
+        """The queue as it changes, pushed to the page.
+
+        A browser's EventSource reconnects by itself, so this is also what
+        makes the board survive a restart of the server it is watching: the
+        page goes quiet for a second and then carries on, with no refresh and
+        nothing lost, because the queue itself lives in files.
+        """
+        session_id = request.query_params.get("session")
+
+        async def stream():
+            seen = -1.0
+            beat = time.monotonic()
+            while True:
+                if await request.is_disconnected():
+                    return
+                stamp = store.changed_at(session_id)
+                if stamp != seen:
+                    seen = stamp
+                    yield "data: " + json.dumps(_state(session_id)) + SEPARATOR
+                    beat = time.monotonic()
+                elif time.monotonic() - beat > BEAT_SECONDS:
+                    # A named event rather than a comment, because the page has
+                    # to be able to tell "nothing has changed" from "nothing is
+                    # answering" - and a comment never reaches it.
+                    yield "event: beat" + chr(10) + "data: {}" + SEPARATOR
+                    beat = time.monotonic()
+                await asyncio.sleep(0.25)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     # Browsers ask for this unprompted; answering plainly keeps the log readable.
     @server.custom_route("/favicon.ico", methods=["GET"])

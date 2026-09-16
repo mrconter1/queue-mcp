@@ -337,6 +337,30 @@ def clear(session_id: str, finished_only: bool = True) -> int:
         return before - len(data["items"])
 
 
+def changed_at(session_id: str | None = None) -> float:
+    """When anything in the queues last changed on disk, as a modification time.
+
+    A write replaces the session file through a rename, which bumps the
+    directory's own time, so one stat answers "has any queue moved" - including
+    another session's, which the board's picker shows. The session's file is
+    checked too, for the filesystems that do not bump the directory.
+
+    Cheap enough to ask several times a second, which is what the live stream
+    does instead of reading and comparing whole queues.
+    """
+    latest = 0.0
+    try:
+        latest = SESSIONS.stat().st_mtime
+    except OSError:
+        pass
+    if session_id:
+        try:
+            latest = max(latest, _path(session_id).stat().st_mtime)
+        except (OSError, ValueError):
+            pass
+    return latest
+
+
 def sessions() -> list[dict[str, Any]]:
     """Every known queue, newest activity first -- used by the CLI to pick a default."""
     if not SESSIONS.exists():

@@ -322,7 +322,8 @@ footer {
  * same files the MCP tools read - so the page holds nothing of its own except
  * which queue is in view and when it last heard back.
  */
-const POLL_MS = 1500;
+/** Only the fallback rate: the stream is what keeps the page current. */
+const POLL_MS = 2000;
 const el = (id) => document.getElementById(id);
 
 // Which queue is in view: the URL wins, so a tab can be left on one queue;
@@ -337,7 +338,11 @@ const remember = (id) => {
 };
 
 let chosen = new URLSearchParams(location.search).get("session") || remembered();
+/** When the server was last heard from at all, and when the queue last moved.
+    They are different questions: a quiet queue still beats. */
 let lastSeen = 0;
+let lastChange = 0;
+let lastUpdated = "";
 let running = null;
 let pending = [];
 /** The item open in an editor, and the row being dragged: while either is set
@@ -386,8 +391,7 @@ const change = async (path, body) => {
             return false;
         }
         showError("");
-        render(payload);
-        lastSeen = Date.now();
+        took(payload);
         return true;
     } catch {
         showError("Cannot reach the queue server.");
@@ -516,17 +520,72 @@ const render = (state) => {
     drawCounts(state.counts || {});
     const items = state.items || [];
     drawNow(items.find((i) => i.status === "in_progress") || null);
-    drawNext(items.filter((i) => i.status === "pending"));
     drawFinished(items.filter((i) => i.status === "done" || i.status === "failed"));
+    // The rest of the page keeps up while a row is being typed into or dragged;
+    // that row does not, or the text under the cursor would be replaced by the
+    // server's copy of it mid-word. The list catches up when the edit ends.
+    if (editing === null && dragging === null) {
+        drawNext(items.filter((i) => i.status === "pending"));
+    } else {
+        pending = items.filter((i) => i.status === "pending");
+    }
 };
 
-const drawFooter = (failed) => {
+/** A gap longer than two heartbeats means nothing is answering, not that
+    nothing is happening. */
+const DEAD_MS = 35000;
+
+const drawFooter = () => {
     const foot = el("footer");
-    if (failed) {
-        foot.innerHTML = '<span class="stale">Cannot reach the queue server. Is it still running?</span>';
+    if (!lastSeen || Date.now() - lastSeen > DEAD_MS) {
+        foot.innerHTML = '<span class="stale">Not hearing from the queue server. Is it still running?</span>';
         return;
     }
-    foot.textContent = `Updated ${since(new Date(lastSeen).toISOString())} ago`;
+    foot.textContent = lastChange
+        ? `Updated ${since(new Date(lastChange).toISOString())} ago`
+        : "Waiting for the queue";
+};
+
+/** One place to record that a state payload arrived, however it arrived. */
+const took = (state) => {
+    lastSeen = Date.now();
+    if (state.updated !== lastUpdated) {
+        lastUpdated = state.updated || "";
+        lastChange = lastSeen;
+    }
+    render(state);
+    drawFooter();
+};
+
+/**
+ * The queue, pushed as it changes. EventSource reconnects by itself, which is
+ * also what carries the page across a restart of the server: it goes quiet for
+ * a moment and then carries on, because the queue lives in files and not in
+ * the process.
+ */
+let stream = null;
+let streamOk = false;
+
+const listen = () => {
+    if (!window.EventSource) { return; }
+    if (stream) { stream.close(); }
+    stream = new EventSource(`/api/events${chosen ? `?session=${encodeURIComponent(chosen)}` : ""}`);
+    stream.onmessage = (event) => {
+        streamOk = true;
+        took(JSON.parse(event.data));
+    };
+    // The queue can be quiet for a long time; a beat says the line is open.
+    stream.addEventListener("beat", () => {
+        streamOk = true;
+        lastSeen = Date.now();
+        drawFooter();
+    });
+    stream.onerror = () => {
+        // The browser is already reconnecting; say so rather than doing
+        // anything about it, and let the slow poll cover the gap.
+        streamOk = false;
+        drawFooter();
+    };
 };
 
 const poll = async () => {
@@ -535,11 +594,9 @@ const poll = async () => {
     try {
         const response = await fetch(`/api/state${chosen ? `?session=${encodeURIComponent(chosen)}` : ""}`);
         if (!response.ok) { throw new Error(response.statusText); }
-        render(await response.json());
-        lastSeen = Date.now();
-        drawFooter(false);
+        took(await response.json());
     } catch {
-        drawFooter(true);
+        drawFooter();
     }
 };
 
@@ -664,6 +721,7 @@ el("session").addEventListener("change", (event) => {
     const url = new URL(location.href);
     url.searchParams.set("session", chosen);
     history.replaceState(null, "", url);
+    listen();
     void poll();
 });
 
@@ -671,11 +729,17 @@ el("session").addEventListener("change", (event) => {
 setInterval(() => {
     const clock = el("elapsed");
     if (clock && running) { clock.textContent = since(running.started); }
-    drawFooter(false);
+    drawFooter();
 }, 1000);
 
 void poll();
-setInterval(poll, POLL_MS);
+listen();
+// The stream does the work; this is the net under it, for a browser without
+// EventSource and for the seconds after a server restart when the page has not
+// been reconnected yet.
+setInterval(() => {
+    if (!streamOk) { void poll(); }
+}, POLL_MS);
 </script>
 </body>
 </html>
