@@ -40,6 +40,11 @@ SEPARATOR = "\n\n"
 # the connection dead at a little over twice this.
 BEAT_SECONDS = 15
 
+# How often a stream bothers to look at the other queues, for the picker. The
+# list it is watching is checked far more often than this; the rest of the
+# machine is not worth a redraw.
+PICKER_SECONDS = 5
+
 
 def _default_session(sessions: list[dict[str, Any]]) -> str | None:
     """Which queue the board opens on.
@@ -54,6 +59,12 @@ def _default_session(sessions: list[dict[str, Any]]) -> str | None:
         if session["pending"] or session["in_progress"]:
             return session["session_id"]
     return sessions[0]["session_id"] if sessions else None
+
+
+def _resolve(session_id: str | None) -> str | None:
+    """The queue a request is actually about: the one asked for if it exists."""
+    sessions = store.sessions()
+    return session_id if session_id in {s["session_id"] for s in sessions} else _default_session(sessions)
 
 
 def _state(session_id: str | None) -> dict[str, Any]:
@@ -180,25 +191,42 @@ def attach(server: Any) -> None:
         page goes quiet for a second and then carries on, with no refresh and
         nothing lost, because the queue itself lives in files.
         """
-        session_id = request.query_params.get("session")
+        # Resolved once, and held for the life of the connection. Resolving on
+        # every push meant that a stream opened without a session followed
+        # "whichever queue has work" as it moved: with several Claude sessions
+        # running on this machine, the board changed to a different session's
+        # list whenever one of them claimed an item.
+        pinned = _resolve(request.query_params.get("session"))
 
         async def stream():
-            seen = -1.0
+            own = -1.0
+            others = store.changed_at()
+            checked = time.monotonic()
             beat = time.monotonic()
             while True:
                 if await request.is_disconnected():
                     return
-                stamp = store.changed_at(session_id)
-                if stamp != seen:
-                    seen = stamp
-                    yield "data: " + json.dumps(_state(session_id)) + SEPARATOR
-                    beat = time.monotonic()
-                elif time.monotonic() - beat > BEAT_SECONDS:
+                stamp = store.changed_at(pinned)
+                now = time.monotonic()
+                push = stamp != own
+                # The picker shows the other queues, so it does go stale when
+                # they move - but not often enough to be worth redrawing this
+                # one's list for. Looked at slowly, and separately.
+                if not push and now - checked > PICKER_SECONDS:
+                    checked = now
+                    if store.changed_at() != others:
+                        others = store.changed_at()
+                        push = True
+                if push:
+                    own = stamp
+                    yield "data: " + json.dumps(_state(pinned)) + SEPARATOR
+                    beat = now
+                elif now - beat > BEAT_SECONDS:
                     # A named event rather than a comment, because the page has
                     # to be able to tell "nothing has changed" from "nothing is
                     # answering" - and a comment never reaches it.
                     yield "event: beat" + chr(10) + "data: {}" + SEPARATOR
-                    beat = time.monotonic()
+                    beat = now
                 await asyncio.sleep(0.25)
 
         return StreamingResponse(

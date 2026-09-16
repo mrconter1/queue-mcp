@@ -338,27 +338,30 @@ def clear(session_id: str, finished_only: bool = True) -> int:
 
 
 def changed_at(session_id: str | None = None) -> float:
-    """When anything in the queues last changed on disk, as a modification time.
+    """When a queue last changed on disk, as a modification time.
 
-    A write replaces the session file through a rename, which bumps the
-    directory's own time, so one stat answers "has any queue moved" - including
-    another session's, which the board's picker shows. The session's file is
-    checked too, for the filesystems that do not bump the directory.
+    With a session, only that queue's own file: a write replaces it through a
+    rename, so its time is fresh whenever it has moved. Without one, the
+    directory's time, which answers the looser question "has any queue moved" -
+    every write in every session bumps it.
+
+    The two are deliberately separate. A board watching one session must not be
+    redrawn because another session claimed an item, and this machine runs
+    several at once; watching the directory for a particular queue did exactly
+    that, several times a minute.
 
     Cheap enough to ask several times a second, which is what the live stream
     does instead of reading and comparing whole queues.
     """
-    latest = 0.0
-    try:
-        latest = SESSIONS.stat().st_mtime
-    except OSError:
-        pass
     if session_id:
         try:
-            latest = max(latest, _path(session_id).stat().st_mtime)
+            return _path(session_id).stat().st_mtime
         except (OSError, ValueError):
-            pass
-    return latest
+            return 0.0
+    try:
+        return SESSIONS.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def sessions() -> list[dict[str, Any]]:

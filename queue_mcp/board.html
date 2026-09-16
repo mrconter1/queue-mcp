@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Queue</title>
 <style>
-/* A local tool, read at a glance from across the desk: one column, generous
-   type, and colour used only where it means something - what is running now,
-   and what failed. */
+/* One list, read top to bottom as the run: what has been done, what is being
+   done, what is left. No headings over it, because a list of tasks in order
+   needs no explaining, and every heading is a line between the reader and the
+   next thing to happen. Colour and movement are spent on one row only - the
+   one that is running. */
 :root {
     color-scheme: light dark;
     --bg: #f6f7f9;
@@ -19,6 +21,8 @@
     --muted: #6b7280;
     --accent: #2563eb;
     --accent-soft: #eef3ff;
+    /* What is legible on the accent: white on a dark blue, dark on a light one. */
+    --accent-ink: #ffffff;
     --good: #067647;
     --bad: #b42318;
     --radius: 8px;
@@ -35,6 +39,7 @@
         --muted: #9aa3b0;
         --accent: #6f9bff;
         --accent-soft: #1d2739;
+        --accent-ink: #10131a;
         --good: #4ade80;
         --bad: #f87171;
     }
@@ -44,7 +49,7 @@
 
 body {
     margin: 0;
-    padding: 24px 20px 64px;
+    padding: 20px 20px 56px;
     background: var(--bg);
     color: var(--text);
     font: 15px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
@@ -52,19 +57,14 @@ body {
 
 main { max-width: 900px; margin: 0 auto; }
 
-header.top {
+/* The only chrome: which queue on the left, whether it is working on the
+   right. Both quiet enough to be ignored while reading the list. */
+.top {
     display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 12px;
-    margin-bottom: 18px;
-}
-
-h1 {
-    margin: 0;
-    font-size: 1.35rem;
-    font-weight: 650;
-    letter-spacing: -0.01em;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    min-height: 26px;
 }
 
 .spacer { flex: 1 1 auto; }
@@ -78,7 +78,48 @@ select, input[type="text"], textarea {
     font: inherit;
 }
 
-header.top select { max-width: 340px; font-size: 0.82rem; }
+.top select {
+    max-width: 300px;
+    padding: 3px 6px;
+    border-color: transparent;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.78rem;
+}
+
+.top select:hover, .top select:focus {
+    border-color: var(--border-strong);
+    background: var(--surface);
+}
+
+/* Working, and only then. A ring rather than a bar or a bouncing thing: it
+   turns at one speed and says nothing else. */
+#working { display: none; align-items: center; gap: 7px; }
+
+#working.on { display: inline-flex; }
+
+#working .word { color: var(--muted); font-size: 0.76rem; }
+
+.spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--accent);
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Someone who does not want movement still needs to know it is working. */
+@media (prefers-reduced-motion: reduce) {
+    .spinner {
+        border-right-color: var(--accent);
+        animation: breathe 2s ease-in-out infinite;
+    }
+}
 
 button {
     padding: 6px 12px;
@@ -96,65 +137,23 @@ button:hover { background: var(--raised); }
 button.primary {
     border-color: var(--accent);
     background: var(--accent);
-    color: #fff;
+    color: var(--accent-ink);
 }
 
 button.primary:hover { filter: brightness(1.06); }
 
-/* Adding: one line, at the head of the list it adds to. */
+/* Adding: one line above the list it adds to the end of. */
 form.add { display: flex; gap: 8px; margin-bottom: 10px; }
 
 form.add input[type="text"] { flex: 1 1 auto; }
-
-.counts {
-    display: flex;
-    gap: 6px;
-    font-size: 0.78rem;
-    color: var(--muted);
-}
-
-.count strong { color: var(--text); font-weight: 600; }
-
-h2 {
-    margin: 26px 0 10px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--muted);
-}
-
-h2 .n { font-weight: 500; letter-spacing: 0; text-transform: none; }
-
-/* What is being worked on right now: the one thing on the page that is
-   allowed to shout. */
-.now {
-    border: 1px solid var(--accent);
-    border-left-width: 4px;
-    border-radius: var(--radius);
-    background: var(--accent-soft);
-    padding: 14px 16px;
-}
-
-.now .text { font-size: 1.02rem; font-weight: 550; }
-
-.now .meta { margin-top: 6px; font-size: 0.8rem; color: var(--muted); }
-
-.idle {
-    border: 1px dashed var(--border-strong);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    color: var(--muted);
-    font-size: 0.9rem;
-}
 
 ol.items { list-style: none; margin: 0; padding: 0; }
 
 li.item {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 9px 12px;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 8px 12px;
     border: 1px solid var(--border);
     border-bottom: 0;
     background: var(--surface);
@@ -173,55 +172,123 @@ li.item.over { box-shadow: inset 0 2px 0 0 var(--accent); }
 
 li.item.over-below { box-shadow: inset 0 -2px 0 0 var(--accent); }
 
-.grip {
-    color: var(--border-strong);
-    cursor: grab;
-    user-select: none;
-    font-size: 0.9rem;
+/* The running row is the live one: the page's only accent, and the only thing
+   on it that moves. */
+/* The thicker left edge eats into the padding rather than adding to it, so the
+   running row's text stays in the same column as every other row's. */
+li.item.run {
+    border-left: 3px solid var(--accent);
+    padding-left: 10px;
+    background: var(--accent-soft);
+}
+
+li.item.run .text { font-weight: 550; }
+
+li.item.done .text { color: var(--muted); }
+
+/* One column for the status, so every row's text starts in the same place
+   whatever state it is in. */
+.mark {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 1.5em;
+    font-size: 0.82rem;
     line-height: 1;
 }
 
-li.item:hover .grip { color: var(--muted); }
+.mark.ok { color: var(--good); }
 
-.pos {
-    min-width: 1.6em;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-    font-size: 0.82rem;
-    text-align: right;
+.mark.bad { color: var(--bad); font-weight: 700; }
+
+.mark.waiting { color: var(--border-strong); }
+
+.live {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: breathe 1.5s ease-in-out infinite;
 }
 
+/* The grip takes the status column on a pending row, but only under the
+   pointer: a queue at rest should not look like a set of controls. */
+.mark .grip { display: none; color: var(--muted); cursor: grab; }
+
+li.item[data-pending]:hover .mark .waiting-dot { display: none; }
+
+li.item[data-pending]:hover .mark .grip { display: inline; }
+
 .id {
+    flex: none;
     color: var(--muted);
-    font-size: 0.74rem;
+    font-size: 0.73rem;
     font-variant-numeric: tabular-nums;
+    line-height: 1.55;
 }
 
 .text { flex: 1 1 auto; overflow-wrap: anywhere; }
 
+li.item .text[data-edit] { cursor: text; }
+
+.result {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 0.78rem;
+    opacity: 0.85;
+}
+
 .badge {
+    flex: none;
     padding: 1px 6px;
     border: 1px solid var(--border-strong);
     border-radius: 999px;
     color: var(--muted);
     font-size: 0.68rem;
+    line-height: 1.5;
     white-space: nowrap;
 }
 
-li.item .text[data-edit] { cursor: text; }
+.elapsed {
+    flex: none;
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.55;
+}
+
+/* The finished ones live behind one line, because a queue that has run for a
+   day buries the next task under two hundred done ones. */
+li.item.expander {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.8rem;
+    background: var(--raised);
+}
+
+li.item.expander:hover { color: var(--text); }
+
+li.item.expander .caret {
+    display: inline-block;
+    transition: transform 120ms ease;
+}
+
+li.item.expander.open .caret { transform: rotate(90deg); }
 
 /* Row controls: present but quiet, and only once the row is under the pointer,
    so twenty rows do not read as forty buttons. */
-.row-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 90ms ease; }
+.row-actions { flex: none; display: flex; gap: 4px; opacity: 0; transition: opacity 90ms ease; }
 
 li.item:hover .row-actions,
 li.item:focus-within .row-actions { opacity: 1; }
 
-.row-actions button { padding: 2px 7px; font-size: 0.78rem; line-height: 1.4; }
+.row-actions button { padding: 1px 7px; font-size: 0.76rem; line-height: 1.4; }
 
 .row-actions button.drop:hover { border-color: var(--bad); color: var(--bad); }
 
-/* Editing happens in the row, so the queue keeps its shape while it is done. */
+/* Editing happens in the row, so the list keeps its shape while it is done. */
 .editor { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; }
 
 .editor textarea { width: 100%; min-height: 62px; resize: vertical; }
@@ -230,9 +297,17 @@ li.item:focus-within .row-actions { opacity: 1; }
 
 .editor .hint { color: var(--muted); font-size: 0.75rem; }
 
+.empty {
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
 #error {
     display: none;
-    margin: 12px 0 0;
+    margin: 0 0 10px;
     padding: 8px 12px;
     border: 1px solid var(--bad);
     border-radius: 6px;
@@ -242,74 +317,34 @@ li.item:focus-within .row-actions { opacity: 1; }
 
 #error.shown { display: block; }
 
-.done .text { color: var(--muted); }
-
-.mark { font-weight: 700; font-size: 0.8rem; }
-
-.mark.ok { color: var(--good); }
-
-.mark.bad { color: var(--bad); }
-
-.result {
-    margin: 2px 0 0;
-    color: var(--muted);
-    font-size: 0.8rem;
-}
-
-details.finished summary {
-    cursor: pointer;
-    margin: 26px 0 10px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--muted);
-}
-
-details.finished summary .n { font-weight: 500; letter-spacing: 0; text-transform: none; }
-
-footer {
-    margin-top: 28px;
-    color: var(--muted);
-    font-size: 0.76rem;
-}
+footer { margin-top: 20px; color: var(--muted); font-size: 0.76rem; }
 
 .stale { color: var(--bad); }
 </style>
 </head>
 <body>
 <main>
-    <header class="top">
-        <h1>Queue</h1>
+    <div class="top">
         <select id="session" aria-label="Which queue"></select>
         <span class="spacer"></span>
-        <span class="counts" id="counts"></span>
-    </header>
+        <span id="working" role="status" aria-label="Working">
+            <span class="word">working</span>
+            <span class="spinner" aria-hidden="true"></span>
+        </span>
+    </div>
 
     <p id="error" role="alert"></p>
 
-    <section>
-        <h2>Now</h2>
-        <div id="now"></div>
-    </section>
+    <form class="add" id="add">
+        <input type="text" id="add-text" placeholder="Add a task to the end of the queue" autocomplete="off">
+        <select id="add-mode" aria-label="How it runs">
+            <option value="inline">inline</option>
+            <option value="fork">fork</option>
+        </select>
+        <button type="submit" class="primary">Add</button>
+    </form>
 
-    <section>
-        <h2>Next <span class="n" id="next-count"></span></h2>
-        <form class="add" id="add">
-            <input type="text" id="add-text" placeholder="Add a task to the end of the queue" autocomplete="off">
-            <select id="add-mode" aria-label="How it runs">
-                <option value="inline">inline</option>
-                <option value="fork">fork</option>
-            </select>
-            <button type="submit" class="primary">Add</button>
-        </form>
-        <div id="next"></div>
-    </section>
-
-    <details class="finished" id="finished-wrap">
-        <summary>Finished <span class="n" id="finished-count"></span></summary>
-        <div id="finished"></div>
-    </details>
+    <div id="list"></div>
 
     <footer id="footer"></footer>
 </main>
@@ -318,9 +353,10 @@ footer {
 "use strict";
 
 /**
- * The board polls the server and redraws. State lives on the server - the
- * same files the MCP tools read - so the page holds nothing of its own except
- * which queue is in view and when it last heard back.
+ * The board draws one list from the server's state. State lives on the server -
+ * the same files the MCP tools read - so the page holds nothing of its own
+ * except which queue is in view, whether the finished ones are unfolded, what
+ * is being edited or dragged, and when it last heard back.
  */
 /** Only the fallback rate: the stream is what keeps the page current. */
 const POLL_MS = 2000;
@@ -343,10 +379,17 @@ let chosen = new URLSearchParams(location.search).get("session") || remembered()
 let lastSeen = 0;
 let lastChange = 0;
 let lastUpdated = "";
+/** The last state, split the way the list draws it, so the page can redraw
+    itself - unfolding the finished ones, opening an editor - without asking the
+    server for something it already has. */
 let running = null;
 let pending = [];
+let finished = [];
+/** Folded away by default: the point of opening the page is what happens next,
+    not what already did. */
+let showFinished = false;
 /** The item open in an editor, and the row being dragged: while either is set
-    the list is left alone, so a poll cannot pull the ground from under it. */
+    the list is left alone, so an update cannot pull the ground from under it. */
 let editing = null;
 let dragging = null;
 
@@ -412,7 +455,7 @@ const sessionLabel = (session) => {
 
 const drawSessions = (sessions, current) => {
     const picker = el("session");
-    // Rebuilding the options on every poll would close the dropdown under the
+    // Rebuilding the options on every update would close the dropdown under the
     // pointer, so it is only redrawn when the set of queues actually changes.
     const signature = sessions.map((s) => `${s.session_id}:${s.pending}:${s.in_progress}`).join("|") + `#${current}`;
     if (picker.dataset.signature === signature) { return; }
@@ -432,23 +475,35 @@ const drawSessions = (sessions, current) => {
     picker.innerHTML = group("With work", live) + group("Finished", rest);
 };
 
-const drawNow = (item) => {
-    running = item;
-    if (!item) {
-        el("now").innerHTML = '<div class="idle">Nothing running. The next item starts when the session claims it.</div>';
-        return;
-    }
-    el("now").innerHTML = `
-        <div class="now">
-            <div class="text">${escape(item.text)}</div>
-            <div class="meta"><span class="id">#${item.id}</span> &middot; running <span id="elapsed">${since(item.started)}</span>${item.mode === "fork" ? " &middot; fork" : ""}</div>
-        </div>`;
+/** The only thing on the page that moves, and only while something is running. */
+const drawWorking = (item) => {
+    el("working").classList.toggle("on", Boolean(item));
 };
 
-const rowHtml = (item, index) => `
-    <li class="item" draggable="true" data-id="${item.id}">
-        <span class="grip" aria-hidden="true">&#8942;&#8942;</span>
-        <span class="pos">${index + 1}</span>
+const finishedRow = (item) => `
+    <li class="item done" data-id="${item.id}">
+        <span class="mark ${item.status === "failed" ? "bad" : "ok"}" title="${item.status === "failed" ? "failed" : "done"}">${item.status === "failed" ? "!" : "&#10003;"}</span>
+        <span class="id">#${item.id}</span>
+        <span class="text">${escape(item.text)}
+            ${item.result ? `<div class="result">${escape(item.result)}</div>` : ""}
+        </span>
+    </li>`;
+
+const runningRow = (item) => `
+    <li class="item run" data-id="${item.id}">
+        <span class="mark" title="running"><span class="live" aria-hidden="true"></span></span>
+        <span class="id">#${item.id}</span>
+        <span class="text">${escape(item.text)}</span>
+        ${item.mode === "fork" ? '<span class="badge">fork</span>' : ""}
+        <span class="elapsed" id="elapsed">${since(item.started)}</span>
+    </li>`;
+
+const pendingRow = (item) => `
+    <li class="item" draggable="true" data-id="${item.id}" data-pending="1">
+        <span class="mark waiting">
+            <span class="waiting-dot" aria-hidden="true">&#8226;</span>
+            <span class="grip" aria-hidden="true">&#8942;&#8942;</span>
+        </span>
         <span class="id">#${item.id}</span>
         <span class="text" data-edit="${item.id}" title="Click to edit">${escape(item.text)}</span>
         ${item.mode === "fork" ? '<span class="badge">fork</span>' : ""}
@@ -458,9 +513,9 @@ const rowHtml = (item, index) => `
         </span>
     </li>`;
 
-const editorHtml = (item, index) => `
+const editorRow = (item) => `
     <li class="item" data-id="${item.id}">
-        <span class="pos">${index + 1}</span>
+        <span class="mark waiting"><span aria-hidden="true">&#8226;</span></span>
         <span class="id">#${item.id}</span>
         <span class="editor">
             <textarea id="edit-text">${escape(item.text)}</textarea>
@@ -472,16 +527,44 @@ const editorHtml = (item, index) => `
         </span>
     </li>`;
 
-const drawNext = (items) => {
-    pending = items;
-    el("next-count").textContent = items.length ? `(${items.length})` : "";
-    if (!items.length) {
-        el("next").innerHTML = '<div class="idle">Queue empty.</div>';
-        return;
-    }
-    el("next").innerHTML = "<ol class='items'>"
-        + items.map((item, i) => (item.id === editing ? editorHtml(item, i) : rowHtml(item, i))).join("")
-        + "</ol>";
+const expanderRow = (count) => `
+    <li class="item expander${showFinished ? " open" : ""}" data-toggle="1">
+        <span class="mark caret" aria-hidden="true">&#9656;</span>
+        <span class="text">${count} finished</span>
+    </li>`;
+
+/**
+ * One list, in the order the work happened and will happen: what is done (out
+ * of the way until asked for), then what is running, then what is waiting.
+ */
+/**
+ * Everything the list is drawn from. Compared before touching the DOM, because
+ * a rebuild throws away the scroll position, whatever is under the pointer and
+ * the row that was half-hovered - and most payloads change nothing this page
+ * shows: a beat, another queue's counts, the same state sent twice.
+ */
+const listSignature = () => JSON.stringify([
+    showFinished,
+    editing,
+    running && [running.id, running.text, running.mode, running.started],
+    finished.map((i) => [i.id, i.status, i.text, i.result]),
+    pending.map((i) => [i.id, i.text, i.mode])
+]);
+
+let drawn = "";
+
+const drawList = () => {
+    const signature = listSignature();
+    if (signature === drawn) { return; }
+    drawn = signature;
+    const rows = [];
+    if (finished.length) { rows.push(expanderRow(finished.length)); }
+    if (showFinished) { rows.push(...finished.map(finishedRow)); }
+    if (running) { rows.push(runningRow(running)); }
+    rows.push(...pending.map((item) => (item.id === editing ? editorRow(item) : pendingRow(item))));
+    el("list").innerHTML = rows.length
+        ? `<ol class="items">${rows.join("")}</ol>`
+        : '<div class="empty">Nothing queued.</div>';
     if (editing !== null) {
         const box = el("edit-text");
         if (box) {
@@ -491,43 +574,22 @@ const drawNext = (items) => {
     }
 };
 
-const drawFinished = (items) => {
-    // Newest first: what just happened is what a reader is looking for.
-    const recent = items.slice().reverse();
-    el("finished-count").textContent = recent.length ? `(${recent.length})` : "";
-    el("finished").innerHTML = recent.length ? "<ol class='items'>" + recent.map((item) => `
-        <li class="item done">
-            <span class="mark ${item.status === "failed" ? "bad" : "ok"}">${item.status === "failed" ? "!" : "x"}</span>
-            <span class="id">#${item.id}</span>
-            <span class="text">${escape(item.text)}
-                ${item.result ? `<div class="result">${escape(item.result)}</div>` : ""}
-            </span>
-        </li>`).join("") + "</ol>" : '<div class="idle">Nothing finished in this queue yet.</div>';
-};
-
-const drawCounts = (counts) => {
-    const part = (label, value) => `<span class="count"><strong>${value || 0}</strong> ${label}</span>`;
-    el("counts").innerHTML = [
-        part("pending", counts.pending),
-        part("done", counts.done),
-        counts.failed ? part("failed", counts.failed) : ""
-    ].filter(Boolean).join(" &middot; ");
-};
-
 const render = (state) => {
-    chosen = state.session_id || "";
     drawSessions(state.sessions || [], chosen);
-    drawCounts(state.counts || {});
     const items = state.items || [];
-    drawNow(items.find((i) => i.status === "in_progress") || null);
-    drawFinished(items.filter((i) => i.status === "done" || i.status === "failed"));
-    // The rest of the page keeps up while a row is being typed into or dragged;
-    // that row does not, or the text under the cursor would be replaced by the
-    // server's copy of it mid-word. The list catches up when the edit ends.
+    running = items.find((i) => i.status === "in_progress") || null;
+    drawWorking(running);
+    // Finished in the order they finished, which is not always the order they
+    // were queued in: an item can be dropped from the middle of the list.
+    finished = items
+        .filter((i) => i.status === "done" || i.status === "failed")
+        .sort((a, b) => String(a.finished || "").localeCompare(String(b.finished || "")));
+    pending = items.filter((i) => i.status === "pending");
+    // A row being typed into or dragged holds the whole list still, or the text
+    // under the cursor would be replaced by the server's copy of it mid-word.
+    // Everything outside the list - the working icon, the footer - keeps up.
     if (editing === null && dragging === null) {
-        drawNext(items.filter((i) => i.status === "pending"));
-    } else {
-        pending = items.filter((i) => i.status === "pending");
+        drawList();
     }
 };
 
@@ -546,6 +608,22 @@ const drawFooter = () => {
         : "Waiting for the queue";
 };
 
+/**
+ * The page opens without naming a queue, and the server answers with the one it
+ * thinks is live. From that first answer on, the page asks for that queue by
+ * name - in its requests, in the URL and in what it remembers - so nothing can
+ * move it onto another session's list while it is being read.
+ */
+const pin = (id) => {
+    if (!id || id === chosen) { return false; }
+    chosen = id;
+    remember(chosen);
+    const url = new URL(location.href);
+    url.searchParams.set("session", chosen);
+    history.replaceState(null, "", url);
+    return true;
+};
+
 /** One place to record that a state payload arrived, however it arrived. */
 const took = (state) => {
     lastSeen = Date.now();
@@ -553,8 +631,12 @@ const took = (state) => {
         lastUpdated = state.updated || "";
         lastChange = lastSeen;
     }
+    // Named before drawing, and the stream reopened on the name, so the server
+    // holds this queue for the life of that connection too.
+    const pinned = pin(state.session_id);
     render(state);
     drawFooter();
+    if (pinned) { listen(); }
 };
 
 /**
@@ -589,7 +671,7 @@ const listen = () => {
 };
 
 const poll = async () => {
-    // A poll in the middle of a drag would rebuild the row under the pointer.
+    // An update in the middle of a drag would rebuild the row under the pointer.
     if (dragging !== null) { return; }
     try {
         const response = await fetch(`/api/state${chosen ? `?session=${encodeURIComponent(chosen)}` : ""}`);
@@ -623,40 +705,48 @@ const saveEdit = async () => {
     if (text) { await change("/api/edit", { id, text }); } else { await poll(); }
 };
 
-const cancelEdit = async () => {
+const cancelEdit = () => {
     editing = null;
-    await poll();
+    drawList();
 };
 
-el("next").addEventListener("click", async (event) => {
-    const target = event.target.closest("[data-edit], [data-remove], [data-save], [data-cancel]");
+el("list").addEventListener("click", async (event) => {
+    const target = event.target.closest("[data-edit], [data-remove], [data-save], [data-cancel], [data-toggle]");
     if (!target) { return; }
-    if (target.dataset.remove) {
+    // Unfolding the finished ones and opening an editor are both about how the
+    // page is drawn, not about what is in the queue, so they redraw from what
+    // is already here rather than going back to the server for it.
+    if (target.dataset.toggle) {
+        showFinished = !showFinished;
+        drawList();
+    } else if (target.dataset.remove) {
         await change("/api/remove", { id: Number(target.dataset.remove) });
     } else if (target.dataset.save) {
         await saveEdit();
     } else if (target.dataset.cancel) {
-        await cancelEdit();
+        cancelEdit();
     } else if (target.dataset.edit) {
         editing = Number(target.dataset.edit);
-        drawNext(pending);
+        drawList();
     }
 });
 
-el("next").addEventListener("keydown", async (event) => {
+el("list").addEventListener("keydown", async (event) => {
     if (editing === null) { return; }
     if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         await saveEdit();
     } else if (event.key === "Escape") {
         event.preventDefault();
-        await cancelEdit();
+        cancelEdit();
     }
 });
 
 // --- dragging to reorder ------------------------------------------------------
 
-const rowAt = (event) => event.target.closest("li.item[data-id]");
+/** Only the waiting rows move: the finished ones are history and the running
+    one is already being worked on. */
+const rowAt = (event) => event.target.closest("li.item[data-pending]");
 
 /** Which row the pointer is over, and which half of it. */
 const dropAt = (event) => {
@@ -667,10 +757,10 @@ const dropAt = (event) => {
 };
 
 const clearMarks = () => {
-    el("next").querySelectorAll("li.item").forEach((row) => row.classList.remove("over", "over-below"));
+    el("list").querySelectorAll("li.item").forEach((row) => row.classList.remove("over", "over-below"));
 };
 
-el("next").addEventListener("dragstart", (event) => {
+el("list").addEventListener("dragstart", (event) => {
     const row = rowAt(event);
     if (!row || editing !== null) { return; }
     dragging = Number(row.dataset.id);
@@ -680,17 +770,17 @@ el("next").addEventListener("dragstart", (event) => {
     event.dataTransfer.setData("text/plain", row.dataset.id);
 });
 
-el("next").addEventListener("dragover", (event) => {
+el("list").addEventListener("dragover", (event) => {
     if (dragging === null) { return; }
-    event.preventDefault();
     const row = rowAt(event);
     if (!row) { return; }
+    event.preventDefault();
     clearMarks();
     const box = row.getBoundingClientRect();
     row.classList.add(event.clientY > box.top + box.height / 2 ? "over-below" : "over");
 });
 
-el("next").addEventListener("drop", async (event) => {
+el("list").addEventListener("drop", async (event) => {
     if (dragging === null) { return; }
     event.preventDefault();
     const target = dropAt(event);
@@ -706,7 +796,7 @@ el("next").addEventListener("drop", async (event) => {
     await change("/api/reorder", { ids });
 });
 
-el("next").addEventListener("dragend", async () => {
+el("list").addEventListener("dragend", async () => {
     if (dragging === null) { return; }
     dragging = null;
     clearMarks();
@@ -717,6 +807,8 @@ el("session").addEventListener("change", (event) => {
     chosen = event.target.value;
     remember(chosen);
     editing = null;
+    // A different queue is a different list, even if it happened to look the same.
+    drawn = "";
     // The queue in view belongs in the URL, so a tab can be left on one.
     const url = new URL(location.href);
     url.searchParams.set("session", chosen);
@@ -725,7 +817,7 @@ el("session").addEventListener("change", (event) => {
     void poll();
 });
 
-// The elapsed time ticks between polls, so the page never looks frozen.
+// The elapsed time ticks between updates, so the running row never looks frozen.
 setInterval(() => {
     const clock = el("elapsed");
     if (clock && running) { clock.textContent = since(running.started); }
