@@ -73,10 +73,12 @@ On receiving a request that passes the test:
 
 **The loop:**
 1. `queue_next` claims one item and marks it in progress.
-2. Do the work.
-3. `queue_complete` with a one-line result. Mark `failed: true` if it did not
+2. `queue_running` as the work actually starts, which on a forked item is when
+   the subagent is launched. The board shows Claimed until then.
+3. Do the work.
+4. `queue_complete` with a one-line result. Mark `failed: true` if it did not
    work; do not silently mark it done.
-4. Back to step 1. Stop when `queue_next` returns `drained: true`.
+5. Back to step 1. Stop when `queue_next` returns `drained: true`.
 
 **Rules that matter:**
 - **One at a time.** Never claim a new item while one is in progress.
@@ -106,8 +108,9 @@ when the queue reports `drained`.
 ## The board
 
 Open <http://127.0.0.1:8766/> - the same port the tools answer on, no second
-thing to start. It shows what is running now with the time it has been running,
-what is queued in order, and what is finished with the result it finished with.
+thing to start. One table, in the order the work happens, with a state against
+every row: Waiting, Claimed (taken but not yet begun), Running, Finished, or
+Failed with the result it failed with.
 
 You can work from it as well as watch it: add a task, reword one, drop one, or
 drag one up the order. Changes go through the same files the tools use, under
@@ -129,6 +132,7 @@ choice is kept in the URL, so a tab can be left on one queue.
 | `queue_add` | Append or insert an item |
 | `queue_list` / `queue_current` | What is queued, what is running |
 | `queue_next` | Claim the next item |
+| `queue_running` | Say the work has actually started, not just been claimed |
 | `queue_complete` | Mark done or failed |
 | `queue_remove` / `queue_edit` / `queue_move` / `queue_clear` | Change the queue |
 | `queue_sessions` / `queue_history` | Every known queue, and past work |

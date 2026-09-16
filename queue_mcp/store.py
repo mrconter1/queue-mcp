@@ -197,6 +197,11 @@ def _archive(session_id: str, item: dict[str, Any], outcome: str) -> dict[str, A
         "outcome": outcome,
         "added": item.get("added"),
         "started": item.get("started"),
+        # When the worker actually began, where it was said. Kept beside
+        # "started" rather than replacing it: one is when the item was taken,
+        # the other when it was worked, and the wait between them is worth
+        # keeping in a record of what a queue actually did.
+        "running": item.get("running"),
         "finished": item.get("finished"),
         "recorded": _now(),
         "duration_seconds": _duration(item.get("started"), item.get("finished")),
@@ -234,6 +239,7 @@ def add(session_id: str, text: str, mode: str = "fork", position: int | None = N
             "status": PENDING,
             "added": _now(),
             "started": None,
+            "running": None,
             "finished": None,
             "result": None,
         }
@@ -280,6 +286,29 @@ def claim_next(session_id: str) -> dict[str, Any] | None:
                 _write(session_id, data)
                 return item
         return None
+
+
+def mark_running(session_id: str, item_id: int) -> dict[str, Any]:
+    """Record that work on a claimed item has actually begun.
+
+    ``claim_next`` only says an item has been handed over. When the work is done
+    by a subagent that takes a while to get going, the gap between taken and
+    being worked on is long enough to watch, and a board that calls both of them
+    the same thing cannot tell you which one you are looking at.
+
+    Said once: the first time is when work began, and saying it again does not
+    move that. Items written before this field existed simply do not have it,
+    which reads as claimed - the honest answer for a queue that was never told.
+    """
+    with _lock(session_id):
+        data = _read(session_id)
+        item = _find(data, item_id)
+        if item["status"] != IN_PROGRESS:
+            raise ValueError("only a claimed item can be running; claim it with queue_next first")
+        if not item.get("running"):
+            item["running"] = _now()
+            _write(session_id, data)
+        return item
 
 
 def current(session_id: str) -> dict[str, Any] | None:

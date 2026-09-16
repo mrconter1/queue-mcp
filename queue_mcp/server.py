@@ -26,9 +26,10 @@ server = MCPServer(
     "queue",
     instructions=(
         "Per-session task queue. Work items through it one at a time: call "
-        "queue_next to claim the next item, do the work (spawn a forked "
-        "subagent when the item's mode is 'fork'), then call queue_complete "
-        "before claiming the next. Stop when queue_next returns nothing. "
+        "queue_next to claim the next item, call queue_running as the work "
+        "actually starts (spawn a forked subagent when the item's mode is "
+        "'fork'), then call queue_complete before claiming the next. Stop when "
+        "queue_next returns nothing. "
         "Always pass the current Claude Code session id as session_id. "
         "queue_history answers what has already been processed, across all "
         "sessions, including items that were dropped before they ran."
@@ -81,6 +82,21 @@ def queue_next(session_id: str) -> dict[str, Any]:
     if item is None:
         return _ok(item=None, drained=True)
     return _ok(item=item, drained=False)
+
+
+@server.tool()
+def queue_running(session_id: str, item_id: int) -> dict[str, Any]:
+    """Say that work on a claimed item has actually started.
+
+    queue_next claims an item, which is not the same as working on it: when the
+    work goes to a subagent, call this as the worker is launched. The board
+    shows the difference as Claimed and Running, so somebody watching can tell
+    a handover from a hold-up. Saying it twice is harmless.
+    """
+    try:
+        return _ok(item=store.mark_running(session_id, item_id))
+    except (KeyError, ValueError, OSError) as exc:
+        return _err(str(exc))
 
 
 @server.tool()

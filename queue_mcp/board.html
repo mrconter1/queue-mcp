@@ -147,63 +147,116 @@ form.add { display: flex; gap: 8px; margin-bottom: 10px; }
 
 form.add input[type="text"] { flex: 1 1 auto; }
 
-ol.items { list-style: none; margin: 0; padding: 0; }
-
-li.item {
-    display: flex;
-    align-items: flex-start;
-    gap: 9px;
-    padding: 8px 12px;
+/* A table, because the states only mean anything read down a column: four
+   Waiting under one Running is the shape of the run, seen without reading a
+   word of the tasks. */
+table.queue {
+    width: 100%;
+    border-collapse: collapse;
     border: 1px solid var(--border);
-    border-bottom: 0;
+    /* A collapsed table squares off a rounded border again unless the corners
+       are clipped. */
+    border-radius: var(--radius);
+    overflow: hidden;
     background: var(--surface);
 }
 
-li.item:first-child { border-radius: var(--radius) var(--radius) 0 0; }
-
-li.item:last-child { border-bottom: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
-
-li.item:only-child { border-radius: var(--radius); }
-
-li.item.dragging { opacity: 0.4; }
-
-/* Where the dragged row would land. */
-li.item.over { box-shadow: inset 0 2px 0 0 var(--accent); }
-
-li.item.over-below { box-shadow: inset 0 -2px 0 0 var(--accent); }
-
-/* The running row is the live one: the page's only accent, and the only thing
-   on it that moves. */
-/* The thicker left edge eats into the padding rather than adding to it, so the
-   running row's text stays in the same column as every other row's. */
-li.item.run {
-    border-left: 3px solid var(--accent);
-    padding-left: 10px;
-    background: var(--accent-soft);
+thead th {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--raised);
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    text-align: left;
 }
 
-li.item.run .text { font-weight: 550; }
+tbody td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
 
-li.item.done .text { color: var(--muted); }
+tbody tr:last-child td { border-bottom: 0; }
 
-/* One column for the status, so every row's text starts in the same place
-   whatever state it is in. */
-.mark {
-    flex: none;
+/* The narrow columns are given their width so the task column takes whatever
+   is left; only the task should move when the window does. */
+.col-grip { width: 22px; padding-left: 8px; padding-right: 0; }
+
+.col-state { width: 100px; white-space: nowrap; }
+
+.col-id {
+    width: 46px;
+    color: var(--muted);
+    font-size: 0.73rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.col-mode { width: 56px; color: var(--muted); font-size: 0.74rem; }
+
+.col-time {
+    width: 76px;
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.col-do { width: 76px; }
+
+/* The one being worked on is the live row: the page's only accent, and the
+   only thing on it that moves. The edge is drawn inside the cell so the row
+   keeps its height and its text stays in the same column as the others. */
+tr.running td { background: var(--accent-soft); }
+
+tr.running td:first-child { box-shadow: inset 3px 0 0 0 var(--accent); }
+
+tr.running .text { font-weight: 550; }
+
+tr.finished .text, tr.failed .text { color: var(--muted); }
+
+tr.dragging td { opacity: 0.4; }
+
+/* Where the dragged row would land. */
+tr.over td { box-shadow: inset 0 2px 0 0 var(--accent); }
+
+tr.over-below td { box-shadow: inset 0 -2px 0 0 var(--accent); }
+
+/* The state, as a word and a mark: the word to read, the mark to scan. */
+.state { display: inline-flex; align-items: center; gap: 7px; font-size: 0.82rem; }
+
+.state .sym {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 15px;
-    height: 1.5em;
-    font-size: 0.82rem;
+    width: 9px;
+    font-size: 0.8rem;
     line-height: 1;
 }
 
-.mark.ok { color: var(--good); }
+/* The marks live in the stylesheet rather than the markup, so selecting the
+   page copies the word alone. */
+.state.waiting .sym::before { content: "\00B7"; }
 
-.mark.bad { color: var(--bad); font-weight: 700; }
+.state.claimed .sym::before { content: "\25CB"; }
 
-.mark.waiting { color: var(--border-strong); }
+.state.finished .sym::before { content: "\2713"; }
+
+.state.failed .sym::before { content: "!"; }
+
+.state.waiting { color: var(--muted); }
+
+.state.claimed { color: var(--text); }
+
+.state.running { color: var(--accent); font-weight: 600; }
+
+.state.finished { color: var(--good); }
+
+.state.failed { color: var(--bad); font-weight: 600; }
 
 .live {
     width: 8px;
@@ -213,83 +266,57 @@ li.item.done .text { color: var(--muted); }
     animation: breathe 1.5s ease-in-out infinite;
 }
 
-/* The grip takes the status column on a pending row, but only under the
-   pointer: a queue at rest should not look like a set of controls. */
-.mark .grip { display: none; color: var(--muted); cursor: grab; }
-
-li.item[data-pending]:hover .mark .waiting-dot { display: none; }
-
-li.item[data-pending]:hover .mark .grip { display: inline; }
-
-.id {
-    flex: none;
-    color: var(--muted);
-    font-size: 0.73rem;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.55;
+/* The drag handle, and only under the pointer: a queue at rest should not look
+   like a set of controls. It is the only draggable thing on the page, so the
+   rest of a row stays ordinary selectable text. */
+.grip {
+    visibility: hidden;
+    color: var(--border-strong);
+    cursor: grab;
+    user-select: none;
 }
 
-.text { flex: 1 1 auto; overflow-wrap: anywhere; }
+tr[data-pending]:hover .grip { visibility: visible; color: var(--muted); }
 
-li.item .text[data-edit] { cursor: text; }
+.text { overflow-wrap: anywhere; }
+
+.text[data-edit] { cursor: text; }
 
 .result {
-    margin: 2px 0 0;
+    margin: 3px 0 0;
     color: var(--muted);
     font-size: 0.78rem;
     opacity: 0.85;
 }
 
-.badge {
-    flex: none;
-    padding: 1px 6px;
-    border: 1px solid var(--border-strong);
-    border-radius: 999px;
-    color: var(--muted);
-    font-size: 0.68rem;
-    line-height: 1.5;
-    white-space: nowrap;
-}
-
-.elapsed {
-    flex: none;
-    color: var(--muted);
-    font-size: 0.76rem;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.55;
-}
-
 /* The finished ones live behind one line, because a queue that has run for a
    day buries the next task under two hundred done ones. */
-li.item.expander {
+tr.fold td {
     cursor: pointer;
+    background: var(--raised);
     color: var(--muted);
     font-size: 0.8rem;
-    background: var(--raised);
 }
 
-li.item.expander:hover { color: var(--text); }
+tr.fold:hover td { color: var(--text); }
 
-li.item.expander .caret {
-    display: inline-block;
-    transition: transform 120ms ease;
-}
+tr.fold .caret { display: inline-block; transition: transform 120ms ease; }
 
-li.item.expander.open .caret { transform: rotate(90deg); }
+tr.fold.open .caret { transform: rotate(90deg); }
 
 /* Row controls: present but quiet, and only once the row is under the pointer,
    so twenty rows do not read as forty buttons. */
-.row-actions { flex: none; display: flex; gap: 4px; opacity: 0; transition: opacity 90ms ease; }
+.row-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 90ms ease; }
 
-li.item:hover .row-actions,
-li.item:focus-within .row-actions { opacity: 1; }
+tr:hover .row-actions,
+tr:focus-within .row-actions { opacity: 1; }
 
 .row-actions button { padding: 1px 7px; font-size: 0.76rem; line-height: 1.4; }
 
 .row-actions button.drop:hover { border-color: var(--bad); color: var(--bad); }
 
-/* Editing happens in the row, so the list keeps its shape while it is done. */
-.editor { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; }
+/* Editing happens in the row, so the table keeps its shape while it is done. */
+.editor { display: flex; flex-direction: column; gap: 6px; }
 
 .editor textarea { width: 100%; min-height: 62px; resize: vertical; }
 
@@ -382,7 +409,9 @@ let lastUpdated = "";
 /** The last state, split the way the list draws it, so the page can redraw
     itself - unfolding the finished ones, opening an editor - without asking the
     server for something it already has. */
-let running = null;
+/** The item the queue has handed over, whether or not work has begun on it:
+    the row that shows as Claimed or as Running. */
+let active = null;
 let pending = [];
 let finished = [];
 /** Folded away by default: the point of opening the page is what happens next,
@@ -398,15 +427,16 @@ const escape = (value) => String(value ?? "").replace(/[&<>"]/g, (c) => (
 ));
 
 /** A count of seconds as a person would say it. */
-const since = (stamp) => {
-    if (!stamp) { return ""; }
-    const seconds = Math.max(0, Math.round((Date.now() - new Date(stamp).getTime()) / 1000));
+const spell = (raw) => {
+    const seconds = Math.max(0, Math.round(raw));
     if (seconds < 60) { return `${seconds}s`; }
     const minutes = Math.floor(seconds / 60);
     if (minutes < 60) { return `${minutes}m ${seconds % 60}s`; }
     const hours = Math.floor(minutes / 60);
     return `${hours}h ${minutes % 60}m`;
 };
+
+const since = (stamp) => (stamp ? spell((Date.now() - new Date(stamp).getTime()) / 1000) : "");
 
 const showError = (message) => {
     const box = el("error");
@@ -480,90 +510,144 @@ const drawWorking = (item) => {
     el("working").classList.toggle("on", Boolean(item));
 };
 
-const finishedRow = (item) => `
-    <li class="item done" data-id="${item.id}">
-        <span class="mark ${item.status === "failed" ? "bad" : "ok"}" title="${item.status === "failed" ? "failed" : "done"}">${item.status === "failed" ? "!" : "&#10003;"}</span>
-        <span class="id">#${item.id}</span>
-        <span class="text">${escape(item.text)}
+/**
+ * What to call a row's state. The queue itself only knows whether an item has
+ * been taken; taken is not the same as being worked on, and when the work goes
+ * to a subagent the gap between them is long enough to sit and wonder about.
+ * An item claimed before the queue recorded that difference has no time on it,
+ * and reads as claimed, which is all anyone can honestly say about it.
+ */
+const stateOf = (item) => {
+    if (item.status === "done") { return "finished"; }
+    if (item.status === "failed") { return "failed"; }
+    if (item.status === "in_progress") { return item.running ? "running" : "claimed"; }
+    return "waiting";
+};
+
+const STATE_WORD = {
+    waiting: "Waiting",
+    claimed: "Claimed",
+    running: "Running",
+    finished: "Finished",
+    failed: "Failed"
+};
+
+/* The marks themselves are drawn by the stylesheet (see .state .sym::before), so
+   a copy of the page reads "Waiting", not a glyph glued to a word. Only the
+   running mark is an element, because it moves. */
+const STATE_SYMBOL = {
+    waiting: "",
+    claimed: "",
+    running: '<span class="live" aria-hidden="true"></span>',
+    finished: "",
+    failed: ""
+};
+
+/** How long the row has been where it is: a live one so far, a finished one
+    how long it took from being claimed to being done. */
+const timeOf = (item, state) => {
+    if (state === "running") { return since(item.running || item.started); }
+    if (state === "claimed") { return since(item.started); }
+    if (!item.started || !item.finished) { return ""; }
+    return spell((new Date(item.finished) - new Date(item.started)) / 1000);
+};
+
+const taskRow = (item) => {
+    const state = stateOf(item);
+    const waiting = state === "waiting";
+    const live = state === "running" || state === "claimed";
+    return `
+    <tr class="${state}" data-id="${item.id}"${waiting ? ' data-pending="1"' : ""}>
+        <td class="col-grip">${waiting ? '<span class="grip" aria-hidden="true">&#8942;&#8942;</span>' : ""}</td>
+        <td class="col-state">
+            <span class="state ${state}"><span class="sym" aria-hidden="true">${STATE_SYMBOL[state]}</span>${STATE_WORD[state]}</span>
+        </td>
+        <td class="col-id">#${item.id}</td>
+        <td class="col-task">
+            <span class="text"${waiting ? ` data-edit="${item.id}" title="Click to edit"` : ""}>${escape(item.text)}</span>
             ${item.result ? `<div class="result">${escape(item.result)}</div>` : ""}
-        </span>
-    </li>`;
-
-const runningRow = (item) => `
-    <li class="item run" data-id="${item.id}">
-        <span class="mark" title="running"><span class="live" aria-hidden="true"></span></span>
-        <span class="id">#${item.id}</span>
-        <span class="text">${escape(item.text)}</span>
-        ${item.mode === "fork" ? '<span class="badge">fork</span>' : ""}
-        <span class="elapsed" id="elapsed">${since(item.started)}</span>
-    </li>`;
-
-const pendingRow = (item) => `
-    <li class="item" draggable="true" data-id="${item.id}" data-pending="1">
-        <span class="mark waiting">
-            <span class="waiting-dot" aria-hidden="true">&#8226;</span>
-            <span class="grip" aria-hidden="true">&#8942;&#8942;</span>
-        </span>
-        <span class="id">#${item.id}</span>
-        <span class="text" data-edit="${item.id}" title="Click to edit">${escape(item.text)}</span>
-        ${item.mode === "fork" ? '<span class="badge">fork</span>' : ""}
-        <span class="row-actions">
-            <button type="button" data-edit="${item.id}" title="Edit this task">Edit</button>
-            <button type="button" class="drop" data-remove="${item.id}" title="Remove from the queue">&times;</button>
-        </span>
-    </li>`;
+        </td>
+        <td class="col-mode">${escape(item.mode)}</td>
+        <td class="col-time"${live ? ' id="elapsed"' : ""}>${timeOf(item, state)}</td>
+        <td class="col-do">${waiting ? `
+            <span class="row-actions">
+                <button type="button" data-edit="${item.id}" title="Edit this task">Edit</button>
+                <button type="button" class="drop" data-remove="${item.id}" title="Remove from the queue">&times;</button>
+            </span>` : ""}
+        </td>
+    </tr>`;
+};
 
 const editorRow = (item) => `
-    <li class="item" data-id="${item.id}">
-        <span class="mark waiting"><span aria-hidden="true">&#8226;</span></span>
-        <span class="id">#${item.id}</span>
-        <span class="editor">
-            <textarea id="edit-text">${escape(item.text)}</textarea>
-            <span class="buttons">
-                <button type="button" class="primary" data-save="${item.id}">Save</button>
-                <button type="button" data-cancel="1">Cancel</button>
-                <span class="hint">Enter saves, Shift+Enter for a new line, Esc cancels</span>
+    <tr data-id="${item.id}">
+        <td class="col-grip"></td>
+        <td class="col-state">
+            <span class="state waiting"><span class="sym" aria-hidden="true">&#183;</span>Waiting</span>
+        </td>
+        <td class="col-id">#${item.id}</td>
+        <td colspan="4">
+            <span class="editor">
+                <textarea id="edit-text">${escape(item.text)}</textarea>
+                <span class="buttons">
+                    <button type="button" class="primary" data-save="${item.id}">Save</button>
+                    <button type="button" data-cancel="1">Cancel</button>
+                    <span class="hint">Enter saves, Shift+Enter for a new line, Esc cancels</span>
+                </span>
             </span>
-        </span>
-    </li>`;
+        </td>
+    </tr>`;
 
-const expanderRow = (count) => `
-    <li class="item expander${showFinished ? " open" : ""}" data-toggle="1">
-        <span class="mark caret" aria-hidden="true">&#9656;</span>
-        <span class="text">${count} finished</span>
-    </li>`;
+const foldRow = (count) => `
+    <tr class="fold${showFinished ? " open" : ""}" data-toggle="1">
+        <td class="col-grip"><span class="caret" aria-hidden="true">&#9656;</span></td>
+        <td colspan="6">${count} finished</td>
+    </tr>`;
 
 /**
- * One list, in the order the work happened and will happen: what is done (out
- * of the way until asked for), then what is running, then what is waiting.
- */
-/**
- * Everything the list is drawn from. Compared before touching the DOM, because
- * a rebuild throws away the scroll position, whatever is under the pointer and
- * the row that was half-hovered - and most payloads change nothing this page
- * shows: a beat, another queue's counts, the same state sent twice.
+ * Everything the table is drawn from. Compared before touching the DOM, because
+ * a rebuild throws away the scroll position, whatever is under the pointer, the
+ * row that was half-hovered and any text the reader had selected - and most
+ * payloads change nothing this page shows: a beat, another queue's counts, the
+ * same state sent twice.
  */
 const listSignature = () => JSON.stringify([
     showFinished,
     editing,
-    running && [running.id, running.text, running.mode, running.started],
-    finished.map((i) => [i.id, i.status, i.text, i.result]),
+    active && [active.id, active.text, active.mode, active.started, active.running],
+    finished.map((i) => [i.id, i.status, i.text, i.result, i.mode, i.started, i.finished]),
     pending.map((i) => [i.id, i.text, i.mode])
 ]);
 
+const HEAD = `
+    <thead>
+        <tr>
+            <th class="col-grip"></th>
+            <th class="col-state">State</th>
+            <th class="col-id">#</th>
+            <th class="col-task">Task</th>
+            <th class="col-mode">Mode</th>
+            <th class="col-time">Time</th>
+            <th class="col-do"></th>
+        </tr>
+    </thead>`;
+
 let drawn = "";
 
+/**
+ * One table, in the order the work happened and will happen: what is done (out
+ * of the way until asked for), then what has been taken, then what is waiting.
+ */
 const drawList = () => {
     const signature = listSignature();
     if (signature === drawn) { return; }
     drawn = signature;
     const rows = [];
-    if (finished.length) { rows.push(expanderRow(finished.length)); }
-    if (showFinished) { rows.push(...finished.map(finishedRow)); }
-    if (running) { rows.push(runningRow(running)); }
-    rows.push(...pending.map((item) => (item.id === editing ? editorRow(item) : pendingRow(item))));
+    if (finished.length) { rows.push(foldRow(finished.length)); }
+    if (showFinished) { rows.push(...finished.map(taskRow)); }
+    if (active) { rows.push(taskRow(active)); }
+    rows.push(...pending.map((item) => (item.id === editing ? editorRow(item) : taskRow(item))));
     el("list").innerHTML = rows.length
-        ? `<ol class="items">${rows.join("")}</ol>`
+        ? `<table class="queue">${HEAD}<tbody>${rows.join("")}</tbody></table>`
         : '<div class="empty">Nothing queued.</div>';
     if (editing !== null) {
         const box = el("edit-text");
@@ -577,8 +661,8 @@ const drawList = () => {
 const render = (state) => {
     drawSessions(state.sessions || [], chosen);
     const items = state.items || [];
-    running = items.find((i) => i.status === "in_progress") || null;
-    drawWorking(running);
+    active = items.find((i) => i.status === "in_progress") || null;
+    drawWorking(active);
     // Finished in the order they finished, which is not always the order they
     // were queued in: an item can be dropped from the middle of the list.
     finished = items
@@ -711,7 +795,8 @@ const cancelEdit = () => {
 };
 
 el("list").addEventListener("click", async (event) => {
-    const target = event.target.closest("[data-edit], [data-remove], [data-save], [data-cancel], [data-toggle]");
+    const element = elementAt(event);
+    const target = element && element.closest("[data-edit], [data-remove], [data-save], [data-cancel], [data-toggle]");
     if (!target) { return; }
     // Unfolding the finished ones and opening an editor are both about how the
     // page is drawn, not about what is in the queue, so they redraw from what
@@ -726,6 +811,10 @@ el("list").addEventListener("click", async (event) => {
     } else if (target.dataset.cancel) {
         cancelEdit();
     } else if (target.dataset.edit) {
+        // Selecting a task's words ends in a click on it. That is someone
+        // copying the text out, not asking to rewrite it, and swapping the
+        // words for a textarea under their cursor loses the selection.
+        if (target.tagName !== "BUTTON" && !window.getSelection().isCollapsed) { return; }
         editing = Number(target.dataset.edit);
         drawList();
     }
@@ -744,9 +833,23 @@ el("list").addEventListener("keydown", async (event) => {
 
 // --- dragging to reorder ------------------------------------------------------
 
-/** Only the waiting rows move: the finished ones are history and the running
-    one is already being worked on. */
-const rowAt = (event) => event.target.closest("li.item[data-pending]");
+/** Only the waiting rows move: the finished ones are history and the one that
+    has been taken is already somebody's business. */
+/**
+ * The waiting row an event landed in, or null. The target is not always an
+ * element: press on text that is already selected and the browser starts a
+ * drag of the selection itself, whose events carry the text node - and a text
+ * node has no closest(). That drag is not ours and must simply be ignored.
+ */
+const elementAt = (event) => {
+    const node = event.target;
+    return node instanceof Element ? node : (node && node.parentElement) || null;
+};
+
+const rowAt = (event) => {
+    const element = elementAt(event);
+    return element ? element.closest("tr[data-pending]") : null;
+};
 
 /** Which row the pointer is over, and which half of it. */
 const dropAt = (event) => {
@@ -757,8 +860,30 @@ const dropAt = (event) => {
 };
 
 const clearMarks = () => {
-    el("list").querySelectorAll("li.item").forEach((row) => row.classList.remove("over", "over-below"));
+    el("list").querySelectorAll("tr").forEach((row) => row.classList.remove("over", "over-below"));
 };
+
+/**
+ * A row becomes draggable only while the grip is held.
+ *
+ * It used to be draggable all the time, and that quietly cost the page its
+ * text: Chrome leaves a draggable element out of a select-all altogether, and
+ * dragging across one moves the row instead of selecting the words. Measured on
+ * a four row queue: Ctrl+A returned 54 characters, all of them from the one row
+ * that was not draggable. Setting the flag on mousedown is in time for the drag
+ * that follows, and clearing it afterwards gives the row back to the reader.
+ */
+const dropDraggable = () => {
+    el("list").querySelectorAll("tr[draggable]").forEach((row) => row.removeAttribute("draggable"));
+};
+
+el("list").addEventListener("mousedown", (event) => {
+    const element = elementAt(event);
+    const row = element && element.closest(".grip") && rowAt(event);
+    if (row && editing === null) { row.draggable = true; }
+});
+
+document.addEventListener("mouseup", dropDraggable);
 
 el("list").addEventListener("dragstart", (event) => {
     const row = rowAt(event);
@@ -797,6 +922,7 @@ el("list").addEventListener("drop", async (event) => {
 });
 
 el("list").addEventListener("dragend", async () => {
+    dropDraggable();
     if (dragging === null) { return; }
     dragging = null;
     clearMarks();
@@ -817,10 +943,10 @@ el("session").addEventListener("change", (event) => {
     void poll();
 });
 
-// The elapsed time ticks between updates, so the running row never looks frozen.
+// The elapsed time ticks between updates, so the live row never looks frozen.
 setInterval(() => {
     const clock = el("elapsed");
-    if (clock && running) { clock.textContent = since(running.started); }
+    if (clock && active) { clock.textContent = timeOf(active, stateOf(active)); }
     drawFooter();
 }, 1000);
 

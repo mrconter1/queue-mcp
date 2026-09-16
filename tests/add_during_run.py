@@ -6,6 +6,11 @@ for the next item. This checks the promise end to end rather than by reasoning
 about the code - two writers at once on one file is exactly where reasoning goes
 wrong.
 
+It has since collected the rest of what the board promises: that a row's state
+says something true about it, that a queue written before those states existed
+still reads, and that the words on the page belong to the reader and can be
+selected and copied out.
+
 Run it from the repository root::
 
     python tests/add_during_run.py
@@ -266,10 +271,10 @@ def the_board_keeps_your_typing(server: subprocess.Popen) -> subprocess.Popen:
         page.wait_for_timeout(900)
 
         rows = lambda: page.eval_on_selector_all(
-            "#list li .text", "els => els.map(e => e.textContent.trim())")
+            "#list tbody .text", "els => els.map(e => e.textContent.trim())")
 
         # typing in one row while an item arrives from elsewhere
-        page.click("#list li .text >> nth=1")
+        page.click("#list tr[data-pending] .text >> nth=0")
         page.wait_for_timeout(250)
         page.fill("#edit-text", "two, being typed right now")
         store.add(session, "arrived mid-edit", "inline")
@@ -284,16 +289,17 @@ def the_board_keeps_your_typing(server: subprocess.Popen) -> subprocess.Popen:
         # an item arriving in the middle of a drag: the drop must still do what
         # the pointer said, and the arrival must not be lost either
         order_before = rows()
-        # Pending rows are the draggable ones; the running row and the
-        # "N finished" expander are not, so they are picked out by that flag.
-        draggable = page.query_selector_all("#list li[data-pending]")
+        # Waiting rows are the movable ones; the row that has been taken and the
+        # "N finished" fold are not, so they are picked out by that flag. The
+        # drag starts on the grip, which is the only part of a row that drags.
+        draggable = page.query_selector_all("#list tr[data-pending]")
         check("there are pending rows to drag", len(draggable) >= 2, f"{len(draggable)} found")
         source, target = (draggable[-1], draggable[0]) if len(draggable) >= 2 else (None, None)
         if source and target:
-            sbox, tbox = source.bounding_box(), target.bounding_box()
-            page.mouse.move(sbox["x"] + 30, sbox["y"] + sbox["height"] / 2)
+            sbox, tbox = source.query_selector(".grip").bounding_box(), target.bounding_box()
+            page.mouse.move(sbox["x"] + sbox["width"] / 2, sbox["y"] + sbox["height"] / 2)
             page.mouse.down()
-            page.mouse.move(tbox["x"] + 30, tbox["y"] + 4, steps=8)
+            page.mouse.move(tbox["x"] + 200, tbox["y"] + 4, steps=8)
             store.add(session, "arrived mid-drag", "inline")
             page.wait_for_timeout(900)
             page.mouse.up()
@@ -340,6 +346,137 @@ def the_board_keeps_your_typing(server: subprocess.Popen) -> subprocess.Popen:
     return server
 
 
+# --- 6. the four states a row can be in --------------------------------------
+
+def the_states_read_true() -> None:
+    print("6. waiting, claimed, running, finished")
+    session = "states"
+    store.add(session, "one", "inline")
+    store.add(session, "two", "inline")
+
+    queued = store.listing(session)["items"][0]
+    check("a new item is waiting", queued["status"] == "pending" and not queued.get("running"),
+          f"{queued['status']}, running {queued.get('running')!r}")
+
+    claimed = store.claim_next(session)
+    check("claiming it does not say work has started",
+          claimed["status"] == "in_progress" and not claimed.get("running"),
+          f"running {claimed.get('running')!r}")
+
+    started = store.mark_running(session, claimed["id"])
+    check("and saying so is what makes it running", bool(started.get("running")),
+          f"running {started.get('running')!r}")
+
+    again = store.mark_running(session, claimed["id"])
+    check("saying it twice does not move when work began",
+          again["running"] == started["running"])
+
+    pending_id = [i for i in store.listing(session)["items"] if i["status"] == "pending"][0]["id"]
+    try:
+        store.mark_running(session, pending_id)
+        check("an item nobody claimed cannot be running", False, "it was allowed")
+    except ValueError as exc:
+        check("an item nobody claimed cannot be running", True, str(exc))
+
+    done = store.finish(session, claimed["id"], "did the thing")
+    check("finishing keeps the time work began, for the record",
+          done["status"] == "done" and done["running"] == started["running"])
+    recorded = [r for r in store.history(session_id=session, limit=10)["records"] if r["id"] == claimed["id"]]
+    check("and history keeps it too", bool(recorded) and bool(recorded[0].get("running")),
+          str(recorded[0].get("running")) if recorded else "no record")
+    store.clear(session, finished_only=False)
+
+
+def an_older_queue_still_reads() -> None:
+    print("7. a queue written before any of this")
+    session = "older"
+    store.add(session, "from an older version", "inline")
+    store.claim_next(session)
+
+    # Exactly what was on disk before the field existed: no "running" key at all.
+    path = HOME / "sessions" / f"{session}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for item in data["items"]:
+        item.pop("running", None)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    item = store.current(session)
+    check("it loads", item is not None and item["status"] == "in_progress")
+    check("and reads as claimed rather than blank or broken",
+          item is not None and not item.get("running"), f"running {item.get('running')!r}")
+    store.clear(session, finished_only=False)
+
+
+# --- 8. the board's text belongs to the reader -------------------------------
+
+def the_text_can_be_selected() -> None:
+    print("8. selecting the board's text")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("     (skipped: Playwright is not installed for this interpreter)")
+        return
+
+    session = "selectable"
+    tasks = ["first thing to do", "second thing to do", "third thing to do"]
+    for task in tasks:
+        store.add(session, task, "inline")
+    running = store.claim_next(session)
+    store.mark_running(session, running["id"])
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1100, "height": 800})
+        page.goto(f"{BASE}/?session={session}", wait_until="load")
+        page.wait_for_timeout(900)
+
+        state_of = lambda: page.eval_on_selector_all(
+            "#list tbody .state", "els => els.map(e => e.textContent.trim())")
+        check("the states are the words a person uses",
+              state_of() == ["Running", "Waiting", "Waiting"], str(state_of()))
+
+        page.keyboard.press("Control+a")
+        page.wait_for_timeout(200)
+        selected = page.evaluate("window.getSelection().toString()")
+        missing = [t for t in tasks if t not in selected]
+        check("select all takes every task with it", not missing,
+              f"{len(selected)} chars, missing {missing}")
+
+        # Dragging across a waiting row's words selects them rather than moving
+        # the row, which is the only way to copy a task out of the page.
+        page.evaluate("window.getSelection().removeAllRanges()")
+        box = page.query_selector("#list tr[data-pending] .text").bounding_box()
+        page.mouse.move(box["x"] + 1, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] - 1, box["y"] + box["height"] / 2, steps=10)
+        page.mouse.up()
+        page.wait_for_timeout(250)
+        dragged = page.evaluate("window.getSelection().toString()").strip()
+        check("dragging across a waiting row selects its words",
+              dragged in tasks[1], repr(dragged))
+        check("and does not open the editor over them",
+              page.query_selector("#edit-text") is None)
+
+        # The grip still reorders, which is what the row gave up being draggable for.
+        page.evaluate("window.getSelection().removeAllRanges()")
+        before = page.eval_on_selector_all("#list tr[data-pending] .text",
+                                           "els => els.map(e => e.textContent.trim())")
+        rows = page.query_selector_all("#list tr[data-pending]")
+        grip = rows[-1].query_selector(".grip")
+        gbox, tbox = grip.bounding_box(), rows[0].bounding_box()
+        page.mouse.move(gbox["x"] + gbox["width"] / 2, gbox["y"] + gbox["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(tbox["x"] + 200, tbox["y"] + 3, steps=10)
+        page.mouse.up()
+        page.wait_for_timeout(900)
+        after = page.eval_on_selector_all("#list tr[data-pending] .text",
+                                          "els => els.map(e => e.textContent.trim())")
+        check("the grip still drags a row up the order", after != before, f"{before} -> {after}")
+        browser.close()
+
+    store.clear(session, finished_only=False)
+
+
 def main() -> int:
     print(f"queue home: {HOME}")
     print(f"server:     {BASE}\n")
@@ -350,6 +487,9 @@ def main() -> int:
         nothing_is_lost_under_load()
         a_dead_lock_expires()
         server = the_board_keeps_your_typing(server)
+        the_states_read_true()
+        an_older_queue_still_reads()
+        the_text_can_be_selected()
     finally:
         stop_server(server)
 
