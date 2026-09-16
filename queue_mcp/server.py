@@ -54,7 +54,7 @@ def queue_add(session_id: str, text: str, mode: str = "fork", position: int | No
     """
     try:
         return _ok(item=store.add(session_id, text, mode, position))
-    except (ValueError, TimeoutError) as exc:
+    except (ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -76,7 +76,7 @@ def queue_next(session_id: str) -> dict[str, Any]:
     """
     try:
         item = store.claim_next(session_id)
-    except (ValueError, TimeoutError) as exc:
+    except (ValueError, OSError) as exc:
         return _err(str(exc))
     if item is None:
         return _ok(item=None, drained=True)
@@ -97,7 +97,7 @@ def queue_complete(session_id: str, item_id: int, result: str = "", failed: bool
     """Mark an item done (or failed) and record a short result summary."""
     try:
         return _ok(item=store.finish(session_id, item_id, result, failed))
-    except (KeyError, ValueError, TimeoutError) as exc:
+    except (KeyError, ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -106,7 +106,7 @@ def queue_remove(session_id: str, item_id: int) -> dict[str, Any]:
     """Drop an item from the queue entirely."""
     try:
         return _ok(item=store.remove(session_id, item_id))
-    except (KeyError, ValueError, TimeoutError) as exc:
+    except (KeyError, ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -115,7 +115,7 @@ def queue_edit(session_id: str, item_id: int, text: str | None = None, mode: str
     """Reword a queued item, or change how it runs. Finished items cannot be edited."""
     try:
         return _ok(item=store.edit(session_id, item_id, text, mode))
-    except (KeyError, ValueError, TimeoutError) as exc:
+    except (KeyError, ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -124,7 +124,7 @@ def queue_move(session_id: str, item_id: int, position: int) -> dict[str, Any]:
     """Reorder an item; position 0 puts it next."""
     try:
         return _ok(item=store.move(session_id, item_id, position))
-    except (KeyError, ValueError, TimeoutError) as exc:
+    except (KeyError, ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -133,7 +133,7 @@ def queue_clear(session_id: str, finished_only: bool = True) -> dict[str, Any]:
     """Remove finished items, or everything when finished_only is false."""
     try:
         return _ok(removed=store.clear(session_id, finished_only))
-    except (ValueError, TimeoutError) as exc:
+    except (ValueError, OSError) as exc:
         return _err(str(exc))
 
 

@@ -147,8 +147,14 @@ def attach(server: Any) -> None:
             session_id = _session_of(payload)
             apply(session_id, payload)
             return JSONResponse(_state(session_id), headers=NO_STORE)
-        except (KeyError, ValueError, TimeoutError) as exc:
+        except (KeyError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400, headers=NO_STORE)
+        except OSError as exc:
+            # The disk, or a lock that never came free. Said plainly: an
+            # unhandled error here reaches the page as a failed fetch, and the
+            # page then blames the server for being down, which it is not.
+            return JSONResponse({"error": f"the queue could not be written: {exc}"},
+                                status_code=500, headers=NO_STORE)
 
     @server.custom_route("/api/add", methods=["POST"])
     async def add(request: Request) -> Response:

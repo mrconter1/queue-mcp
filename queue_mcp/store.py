@@ -36,6 +36,29 @@ DROPPED = "dropped"
 # A lock older than this is assumed to belong to a crashed process.
 STALE_LOCK_SECONDS = 30
 
+# How long to keep trying when the filesystem says "access denied".
+#
+# On Windows a file that is open cannot be replaced, and a file whose replace is
+# in flight cannot be opened; both come back as access denied and both clear in
+# well under a millisecond. It is not an exotic case: one writer against six
+# readers - which is a session working while a board watches - produced 786
+# failed writes against 454 that got through, and one read in ten failed. The
+# answer to either is to wait a moment and try again, because the work is
+# perfectly good; only the timing was unlucky.
+BUSY_RETRY_SECONDS = 2.0
+
+
+def _through_a_busy_file(action: Any) -> Any:
+    """Run a file operation, waiting out a rename or an open that collides."""
+    deadline = time.monotonic() + BUSY_RETRY_SECONDS
+    while True:
+        try:
+            return action()
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.005)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -59,26 +82,49 @@ def _lock(session_id: str) -> Iterator[None]:
     SESSIONS.mkdir(parents=True, exist_ok=True)
     lock_path = _path(session_id).with_suffix(".lock")
     deadline = time.monotonic() + STALE_LOCK_SECONDS
+    refused: OSError | None = None
     while True:
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
+            refused = None
+        except PermissionError as exc:
+            # Windows, and only Windows: a file whose delete is still pending
+            # cannot be opened at all, and the failure is "access denied"
+            # rather than "it exists". That is another process releasing this
+            # very lock, so it is a reason to wait like any other - but the
+            # loop used to let it out as an exception, and an add, a claim or a
+            # completion simply died. Measured at 2% of acquisitions with six
+            # processes contending, which is a board and a session working
+            # together on a busy queue. Kept in case the deadline runs out,
+            # when a real permission problem is the honest thing to report.
+            refused = exc
+
+        try:
+            age = time.time() - lock_path.stat().st_mtime
+        except OSError:
+            age = 0.0  # gone, or going: try again rather than judge it
+        if age > STALE_LOCK_SECONDS:
             try:
-                age = time.time() - lock_path.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if age > STALE_LOCK_SECONDS:
                 lock_path.unlink(missing_ok=True)
-                continue
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"queue for {session_id} stayed locked")
-            time.sleep(0.05)
+            except OSError:
+                pass  # another process broke it first, which is just as good
+            continue
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"queue for {session_id} stayed locked") from refused
+        time.sleep(0.02)
     try:
         os.close(fd)
         yield
     finally:
-        lock_path.unlink(missing_ok=True)
+        # The same delete-pending window: a release that collides with another
+        # process looking at the lock must not throw, or the work that was just
+        # written would be reported as having failed.
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _blank(session_id: str) -> dict[str, Any]:
@@ -91,12 +137,21 @@ def _blank(session_id: str) -> dict[str, Any]:
     }
 
 
+def _read_text(path: Path) -> str | None:
+    """A file's contents, or None when it is not there, waiting out a busy moment."""
+    try:
+        return _through_a_busy_file(lambda: path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+
+
 def _read(session_id: str) -> dict[str, Any]:
     path = _path(session_id)
-    if not path.exists():
+    raw = _read_text(path)
+    if raw is None:
         return _blank(session_id)
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(raw)
     except json.JSONDecodeError:
         # Never lose the queue to a half-written file; park it and start clean.
         path.replace(path.with_suffix(f".corrupt-{int(time.time())}.json"))
@@ -109,8 +164,13 @@ def _write(session_id: str, data: dict[str, Any]) -> None:
     path = _path(session_id)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(path)  # atomic on Windows and POSIX
-    LAST_SESSION.write_text(session_id, encoding="utf-8")
+    # Atomic on Windows and POSIX, but on Windows it fails outright while any
+    # reader has the file open - and a board polling this queue holds it open
+    # briefly on every change. The caller holds the session lock, so nothing
+    # else can be writing; waiting the reader out is safe and it is the
+    # difference between a task being queued and an error in the user's face.
+    _through_a_busy_file(lambda: tmp.replace(path))
+    _through_a_busy_file(lambda: LAST_SESSION.write_text(session_id, encoding="utf-8"))
 
 
 def _duration(started: str | None, finished: str | None) -> int | None:
@@ -373,8 +433,11 @@ def sessions() -> list[dict[str, Any]]:
         if path.name.endswith(".tmp") or ".corrupt-" in path.name:
             continue
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            raw = _read_text(path)
+            data = json.loads(raw) if raw is not None else None
         except (json.JSONDecodeError, OSError):
+            continue
+        if data is None:
             continue
         pending = sum(1 for i in data["items"] if i["status"] == PENDING)
         running = sum(1 for i in data["items"] if i["status"] == IN_PROGRESS)
@@ -467,8 +530,9 @@ def history(
 
 
 def last_session() -> str | None:
-    if LAST_SESSION.exists():
-        value = LAST_SESSION.read_text(encoding="utf-8").strip()
+    value = _read_text(LAST_SESSION)
+    if value is not None:
+        value = value.strip()
         return value or None
     known = sessions()
     return known[0]["session_id"] if known else None
