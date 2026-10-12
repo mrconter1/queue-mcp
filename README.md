@@ -73,10 +73,12 @@ On receiving a request that passes the test:
 
 **The loop:**
 1. `queue_next` claims one item and marks it in progress.
-2. Do the work.
-3. `queue_complete` with a one-line result. Mark `failed: true` if it did not
+2. `queue_running` as the work actually starts, which on a forked item is when
+   the subagent is launched. The board shows Claimed until then.
+3. Do the work.
+4. `queue_complete` with a one-line result. Mark `failed: true` if it did not
    work; do not silently mark it done.
-4. Back to step 1. Stop when `queue_next` returns `drained: true`.
+5. Back to step 1. Stop when `queue_next` returns `drained: true`.
 
 **Rules that matter:**
 - **One at a time.** Never claim a new item while one is in progress.
@@ -103,6 +105,26 @@ two carry most of the behaviour.
 Claude claims one item, works it, marks it done, then claims the next. It stops
 when the queue reports `drained`.
 
+## The board
+
+Open <http://127.0.0.1:8766/> - the same port the tools answer on, no second
+thing to start. One table, in the order the work happens, with a state against
+every row: Waiting, Claimed (taken but not yet begun), Running, Finished, or
+Failed with the result it failed with.
+
+You can work from it as well as watch it: add a task, reword one, drop one, or
+drag one up the order. Changes go through the same files the tools use, under
+the same lock, so the board and the session can never disagree.
+
+It keeps itself current over a server-sent event stream. Nothing to refresh, and
+because the queue lives in files rather than in the process, restarting the
+server is invisible to the page: it reconnects and carries on. A row you are
+typing into is left alone while the rest of the page keeps up.
+
+The picker at the top chooses between queues - this machine collects one per
+Claude Code session - with the ones that still have work listed first. The
+choice is kept in the URL, so a tab can be left on one queue.
+
 ## Tools
 
 | Tool | Purpose |
@@ -110,15 +132,17 @@ when the queue reports `drained`.
 | `queue_add` | Append or insert an item |
 | `queue_list` / `queue_current` | What is queued, what is running |
 | `queue_next` | Claim the next item |
+| `queue_running` | Say the work has actually started, not just been claimed |
 | `queue_complete` | Mark done or failed |
-| `queue_remove` / `queue_move` / `queue_clear` | Edit the queue |
+| `queue_remove` / `queue_edit` / `queue_move` / `queue_clear` | Change the queue |
 | `queue_sessions` / `queue_history` | Every known queue, and past work |
 
 ## Worth knowing
 
 - **Queues are per session.** Every tool takes `session_id`, because an MCP
   server cannot tell which session is calling it.
-- **Data lives in `~/.queue-mcp`.** Restarting the server loses nothing.
+- **Data lives in `~/.queue-mcp`.** Restarting the server loses nothing, and
+  the board reconnects to it by itself.
 - **The CLI writes the same files as the server**, so adding work does not
   depend on the server being up.
 - **The loop is model-mediated, not enforced.** Claude queues and drains

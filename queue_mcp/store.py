@@ -36,6 +36,29 @@ DROPPED = "dropped"
 # A lock older than this is assumed to belong to a crashed process.
 STALE_LOCK_SECONDS = 30
 
+# How long to keep trying when the filesystem says "access denied".
+#
+# On Windows a file that is open cannot be replaced, and a file whose replace is
+# in flight cannot be opened; both come back as access denied and both clear in
+# well under a millisecond. It is not an exotic case: one writer against six
+# readers - which is a session working while a board watches - produced 786
+# failed writes against 454 that got through, and one read in ten failed. The
+# answer to either is to wait a moment and try again, because the work is
+# perfectly good; only the timing was unlucky.
+BUSY_RETRY_SECONDS = 2.0
+
+
+def _through_a_busy_file(action: Any) -> Any:
+    """Run a file operation, waiting out a rename or an open that collides."""
+    deadline = time.monotonic() + BUSY_RETRY_SECONDS
+    while True:
+        try:
+            return action()
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.005)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -59,26 +82,49 @@ def _lock(session_id: str) -> Iterator[None]:
     SESSIONS.mkdir(parents=True, exist_ok=True)
     lock_path = _path(session_id).with_suffix(".lock")
     deadline = time.monotonic() + STALE_LOCK_SECONDS
+    refused: OSError | None = None
     while True:
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
+            refused = None
+        except PermissionError as exc:
+            # Windows, and only Windows: a file whose delete is still pending
+            # cannot be opened at all, and the failure is "access denied"
+            # rather than "it exists". That is another process releasing this
+            # very lock, so it is a reason to wait like any other - but the
+            # loop used to let it out as an exception, and an add, a claim or a
+            # completion simply died. Measured at 2% of acquisitions with six
+            # processes contending, which is a board and a session working
+            # together on a busy queue. Kept in case the deadline runs out,
+            # when a real permission problem is the honest thing to report.
+            refused = exc
+
+        try:
+            age = time.time() - lock_path.stat().st_mtime
+        except OSError:
+            age = 0.0  # gone, or going: try again rather than judge it
+        if age > STALE_LOCK_SECONDS:
             try:
-                age = time.time() - lock_path.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if age > STALE_LOCK_SECONDS:
                 lock_path.unlink(missing_ok=True)
-                continue
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"queue for {session_id} stayed locked")
-            time.sleep(0.05)
+            except OSError:
+                pass  # another process broke it first, which is just as good
+            continue
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"queue for {session_id} stayed locked") from refused
+        time.sleep(0.02)
     try:
         os.close(fd)
         yield
     finally:
-        lock_path.unlink(missing_ok=True)
+        # The same delete-pending window: a release that collides with another
+        # process looking at the lock must not throw, or the work that was just
+        # written would be reported as having failed.
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _blank(session_id: str) -> dict[str, Any]:
@@ -91,12 +137,21 @@ def _blank(session_id: str) -> dict[str, Any]:
     }
 
 
+def _read_text(path: Path) -> str | None:
+    """A file's contents, or None when it is not there, waiting out a busy moment."""
+    try:
+        return _through_a_busy_file(lambda: path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+
+
 def _read(session_id: str) -> dict[str, Any]:
     path = _path(session_id)
-    if not path.exists():
+    raw = _read_text(path)
+    if raw is None:
         return _blank(session_id)
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(raw)
     except json.JSONDecodeError:
         # Never lose the queue to a half-written file; park it and start clean.
         path.replace(path.with_suffix(f".corrupt-{int(time.time())}.json"))
@@ -109,8 +164,13 @@ def _write(session_id: str, data: dict[str, Any]) -> None:
     path = _path(session_id)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(path)  # atomic on Windows and POSIX
-    LAST_SESSION.write_text(session_id, encoding="utf-8")
+    # Atomic on Windows and POSIX, but on Windows it fails outright while any
+    # reader has the file open - and a board polling this queue holds it open
+    # briefly on every change. The caller holds the session lock, so nothing
+    # else can be writing; waiting the reader out is safe and it is the
+    # difference between a task being queued and an error in the user's face.
+    _through_a_busy_file(lambda: tmp.replace(path))
+    _through_a_busy_file(lambda: LAST_SESSION.write_text(session_id, encoding="utf-8"))
 
 
 def _duration(started: str | None, finished: str | None) -> int | None:
@@ -137,6 +197,11 @@ def _archive(session_id: str, item: dict[str, Any], outcome: str) -> dict[str, A
         "outcome": outcome,
         "added": item.get("added"),
         "started": item.get("started"),
+        # When the worker actually began, where it was said. Kept beside
+        # "started" rather than replacing it: one is when the item was taken,
+        # the other when it was worked, and the wait between them is worth
+        # keeping in a record of what a queue actually did.
+        "running": item.get("running"),
         "finished": item.get("finished"),
         "recorded": _now(),
         "duration_seconds": _duration(item.get("started"), item.get("finished")),
@@ -174,6 +239,7 @@ def add(session_id: str, text: str, mode: str = "fork", position: int | None = N
             "status": PENDING,
             "added": _now(),
             "started": None,
+            "running": None,
             "finished": None,
             "result": None,
         }
@@ -222,6 +288,29 @@ def claim_next(session_id: str) -> dict[str, Any] | None:
         return None
 
 
+def mark_running(session_id: str, item_id: int) -> dict[str, Any]:
+    """Record that work on a claimed item has actually begun.
+
+    ``claim_next`` only says an item has been handed over. When the work is done
+    by a subagent that takes a while to get going, the gap between taken and
+    being worked on is long enough to watch, and a board that calls both of them
+    the same thing cannot tell you which one you are looking at.
+
+    Said once: the first time is when work began, and saying it again does not
+    move that. Items written before this field existed simply do not have it,
+    which reads as claimed - the honest answer for a queue that was never told.
+    """
+    with _lock(session_id):
+        data = _read(session_id)
+        item = _find(data, item_id)
+        if item["status"] != IN_PROGRESS:
+            raise ValueError("only a claimed item can be running; claim it with queue_next first")
+        if not item.get("running"):
+            item["running"] = _now()
+            _write(session_id, data)
+        return item
+
+
 def current(session_id: str) -> dict[str, Any] | None:
     for item in _read(session_id)["items"]:
         if item["status"] == IN_PROGRESS:
@@ -254,6 +343,63 @@ def remove(session_id: str, item_id: int) -> dict[str, Any]:
         return item
 
 
+def edit(session_id: str, item_id: int, text: str | None = None, mode: str | None = None) -> dict[str, Any]:
+    """Change an item's wording, or which way it runs.
+
+    Only while it is still in the queue. A finished item has already been
+    written to history exactly as it was, and rewriting the queue copy would
+    leave the two disagreeing about what was actually done.
+    """
+    with _lock(session_id):
+        data = _read(session_id)
+        item = _find(data, item_id)
+        if item["status"] in (DONE, FAILED):
+            raise ValueError("finished items are history; they cannot be edited")
+        if text is not None:
+            cleaned = text.strip()
+            if not cleaned:
+                raise ValueError("queue items need text")
+            item["text"] = cleaned
+        if mode is not None:
+            if mode not in ("fork", "inline"):
+                raise ValueError("mode must be 'fork' or 'inline'")
+            item["mode"] = mode
+        _write(session_id, data)
+        return item
+
+
+def reorder(session_id: str, ids: list[int]) -> list[int]:
+    """Put the pending items in exactly this order.
+
+    The whole order at once, rather than one move at a time, because that is
+    what a drag on the board produces and it cannot half-apply. The ids must be
+    exactly the pending ones: if the queue has moved on since the page drew it -
+    an item claimed, added or dropped meanwhile - the reorder is refused rather
+    than applied to a queue the user was not looking at.
+
+    Finished and running items keep their places; only the pending slots are
+    filled in the new order.
+    """
+    with _lock(session_id):
+        data = _read(session_id)
+        pending = [i for i in data["items"] if i["status"] == PENDING]
+        by_id = {i["id"]: i for i in pending}
+        if sorted(ids) != sorted(by_id):
+            raise ValueError("the queue changed while you were dragging; it was left as it is")
+        wanted = [by_id[i] for i in ids]
+        fresh: list[dict[str, Any]] = []
+        taken = 0
+        for item in data["items"]:
+            if item["status"] == PENDING:
+                fresh.append(wanted[taken])
+                taken += 1
+            else:
+                fresh.append(item)
+        data["items"] = fresh
+        _write(session_id, data)
+        return [i["id"] for i in wanted]
+
+
 def move(session_id: str, item_id: int, position: int) -> dict[str, Any]:
     with _lock(session_id):
         data = _read(session_id)
@@ -280,6 +426,33 @@ def clear(session_id: str, finished_only: bool = True) -> int:
         return before - len(data["items"])
 
 
+def changed_at(session_id: str | None = None) -> float:
+    """When a queue last changed on disk, as a modification time.
+
+    With a session, only that queue's own file: a write replaces it through a
+    rename, so its time is fresh whenever it has moved. Without one, the
+    directory's time, which answers the looser question "has any queue moved" -
+    every write in every session bumps it.
+
+    The two are deliberately separate. A board watching one session must not be
+    redrawn because another session claimed an item, and this machine runs
+    several at once; watching the directory for a particular queue did exactly
+    that, several times a minute.
+
+    Cheap enough to ask several times a second, which is what the live stream
+    does instead of reading and comparing whole queues.
+    """
+    if session_id:
+        try:
+            return _path(session_id).stat().st_mtime
+        except (OSError, ValueError):
+            return 0.0
+    try:
+        return SESSIONS.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def sessions() -> list[dict[str, Any]]:
     """Every known queue, newest activity first -- used by the CLI to pick a default."""
     if not SESSIONS.exists():
@@ -289,8 +462,11 @@ def sessions() -> list[dict[str, Any]]:
         if path.name.endswith(".tmp") or ".corrupt-" in path.name:
             continue
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            raw = _read_text(path)
+            data = json.loads(raw) if raw is not None else None
         except (json.JSONDecodeError, OSError):
+            continue
+        if data is None:
             continue
         pending = sum(1 for i in data["items"] if i["status"] == PENDING)
         running = sum(1 for i in data["items"] if i["status"] == IN_PROGRESS)
@@ -383,8 +559,9 @@ def history(
 
 
 def last_session() -> str | None:
-    if LAST_SESSION.exists():
-        value = LAST_SESSION.read_text(encoding="utf-8").strip()
+    value = _read_text(LAST_SESSION)
+    if value is not None:
+        value = value.strip()
         return value or None
     known = sessions()
     return known[0]["session_id"] if known else None

@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Queue</title>
+<style>
+/* One list, read top to bottom as the run: what has been done, what is being
+   done, what is left. No headings over it, because a list of tasks in order
+   needs no explaining, and every heading is a line between the reader and the
+   next thing to happen. Colour and movement are spent on one row only - the
+   one that is running. */
+:root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --raised: #f0f2f6;
+    --border: #e2e5ea;
+    --border-strong: #c9ced6;
+    --text: #1c2430;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eef3ff;
+    /* What is legible on the accent: white on a dark blue, dark on a light one. */
+    --accent-ink: #ffffff;
+    --good: #067647;
+    --bad: #b42318;
+    --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #14171c;
+        --surface: #1b1f26;
+        --raised: #232832;
+        --border: #2a2f38;
+        --border-strong: #3a414c;
+        --text: #e8eaed;
+        --muted: #9aa3b0;
+        --accent: #6f9bff;
+        --accent-soft: #1d2739;
+        --accent-ink: #10131a;
+        --good: #4ade80;
+        --bad: #f87171;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 20px 20px 56px;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+}
+
+main { max-width: 900px; margin: 0 auto; }
+
+/* The only chrome: which queue on the left, whether it is working on the
+   right. Both quiet enough to be ignored while reading the list. */
+.top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    min-height: 26px;
+}
+
+.spacer { flex: 1 1 auto; }
+
+select, input[type="text"], textarea {
+    padding: 6px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+}
+
+.top select {
+    max-width: 300px;
+    padding: 3px 6px;
+    border-color: transparent;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.78rem;
+}
+
+.top select:hover, .top select:focus {
+    border-color: var(--border-strong);
+    background: var(--surface);
+}
+
+/* Working, and only then. A ring rather than a bar or a bouncing thing: it
+   turns at one speed and says nothing else. */
+#working { display: none; align-items: center; gap: 7px; }
+
+#working.on { display: inline-flex; }
+
+#working .word { color: var(--muted); font-size: 0.76rem; }
+
+.spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--accent);
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Someone who does not want movement still needs to know it is working. */
+@media (prefers-reduced-motion: reduce) {
+    .spinner {
+        border-right-color: var(--accent);
+        animation: breathe 2s ease-in-out infinite;
+    }
+}
+
+button {
+    padding: 6px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+button:hover { background: var(--raised); }
+
+button.primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-ink);
+}
+
+button.primary:hover { filter: brightness(1.06); }
+
+/* Adding: one line above the list it adds to the end of. */
+form.add { display: flex; gap: 8px; margin-bottom: 10px; }
+
+form.add input[type="text"] { flex: 1 1 auto; }
+
+/* A table, because the states only mean anything read down a column: four
+   Waiting under one Running is the shape of the run, seen without reading a
+   word of the tasks. */
+table.queue {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid var(--border);
+    /* A collapsed table squares off a rounded border again unless the corners
+       are clipped. */
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--surface);
+}
+
+thead th {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--raised);
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    text-align: left;
+}
+
+tbody td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+
+tbody tr:last-child td { border-bottom: 0; }
+
+/* The narrow columns are given their width so the task column takes whatever
+   is left; only the task should move when the window does. */
+.col-grip { width: 22px; padding-left: 8px; padding-right: 0; }
+
+.col-state { width: 100px; white-space: nowrap; }
+
+.col-id {
+    width: 46px;
+    color: var(--muted);
+    font-size: 0.73rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.col-mode { width: 56px; color: var(--muted); font-size: 0.74rem; }
+
+.col-time {
+    width: 76px;
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.col-do { width: 76px; }
+
+/* The one being worked on is the live row: the page's only accent, and the
+   only thing on it that moves. The edge is drawn inside the cell so the row
+   keeps its height and its text stays in the same column as the others. */
+tr.running td { background: var(--accent-soft); }
+
+tr.running td:first-child { box-shadow: inset 3px 0 0 0 var(--accent); }
+
+tr.running .text { font-weight: 550; }
+
+tr.finished .text, tr.failed .text { color: var(--muted); }
+
+tr.dragging td { opacity: 0.4; }
+
+/* Where the dragged row would land. */
+tr.over td { box-shadow: inset 0 2px 0 0 var(--accent); }
+
+tr.over-below td { box-shadow: inset 0 -2px 0 0 var(--accent); }
+
+/* The state, as a word and a mark: the word to read, the mark to scan. */
+.state { display: inline-flex; align-items: center; gap: 7px; font-size: 0.82rem; }
+
+.state .sym {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 9px;
+    font-size: 0.8rem;
+    line-height: 1;
+}
+
+/* The marks live in the stylesheet rather than the markup, so selecting the
+   page copies the word alone. */
+.state.waiting .sym::before { content: "\00B7"; }
+
+.state.claimed .sym::before { content: "\25CB"; }
+
+.state.finished .sym::before { content: "\2713"; }
+
+.state.failed .sym::before { content: "!"; }
+
+.state.waiting { color: var(--muted); }
+
+.state.claimed { color: var(--text); }
+
+.state.running { color: var(--accent); font-weight: 600; }
+
+.state.finished { color: var(--good); }
+
+.state.failed { color: var(--bad); font-weight: 600; }
+
+.live {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: breathe 1.5s ease-in-out infinite;
+}
+
+/* The drag handle, and only under the pointer: a queue at rest should not look
+   like a set of controls. It is the only draggable thing on the page, so the
+   rest of a row stays ordinary selectable text. */
+.grip {
+    visibility: hidden;
+    color: var(--border-strong);
+    cursor: grab;
+    user-select: none;
+}
+
+tr[data-pending]:hover .grip { visibility: visible; color: var(--muted); }
+
+.text { overflow-wrap: anywhere; }
+
+.text[data-edit] { cursor: text; }
+
+.result {
+    margin: 3px 0 0;
+    color: var(--muted);
+    font-size: 0.78rem;
+    opacity: 0.85;
+}
+
+/* The finished ones live behind one line, because a queue that has run for a
+   day buries the next task under two hundred done ones. */
+tr.fold td {
+    cursor: pointer;
+    background: var(--raised);
+    color: var(--muted);
+    font-size: 0.8rem;
+}
+
+tr.fold:hover td { color: var(--text); }
+
+tr.fold .caret { display: inline-block; transition: transform 120ms ease; }
+
+tr.fold.open .caret { transform: rotate(90deg); }
+
+/* Row controls: present but quiet, and only once the row is under the pointer,
+   so twenty rows do not read as forty buttons. */
+.row-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 90ms ease; }
+
+tr:hover .row-actions,
+tr:focus-within .row-actions { opacity: 1; }
+
+.row-actions button { padding: 1px 7px; font-size: 0.76rem; line-height: 1.4; }
+
+.row-actions button.drop:hover { border-color: var(--bad); color: var(--bad); }
+
+/* Editing happens in the row, so the table keeps its shape while it is done. */
+.editor { display: flex; flex-direction: column; gap: 6px; }
+
+.editor textarea { width: 100%; min-height: 62px; resize: vertical; }
+
+.editor .buttons { display: flex; gap: 6px; align-items: center; }
+
+.editor .hint { color: var(--muted); font-size: 0.75rem; }
+
+.empty {
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+#error {
+    display: none;
+    margin: 0 0 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--bad);
+    border-radius: 6px;
+    color: var(--bad);
+    font-size: 0.85rem;
+}
+
+#error.shown { display: block; }
+
+footer { margin-top: 20px; color: var(--muted); font-size: 0.76rem; }
+
+.stale { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+    <div class="top">
+        <select id="session" aria-label="Which queue"></select>
+        <span class="spacer"></span>
+        <span id="working" role="status" aria-label="Working">
+            <span class="word">working</span>
+            <span class="spinner" aria-hidden="true"></span>
+        </span>
+    </div>
+
+    <p id="error" role="alert"></p>
+
+    <form class="add" id="add">
+        <input type="text" id="add-text" placeholder="Add a task to the end of the queue" autocomplete="off">
+        <select id="add-mode" aria-label="How it runs">
+            <option value="inline">inline</option>
+            <option value="fork">fork</option>
+        </select>
+        <button type="submit" class="primary">Add</button>
+    </form>
+
+    <div id="list"></div>
+
+    <footer id="footer"></footer>
+</main>
+
+<script>
+"use strict";
+
+/**
+ * The board draws one list from the server's state. State lives on the server -
+ * the same files the MCP tools read - so the page holds nothing of its own
+ * except which queue is in view, whether the finished ones are unfolded, what
+ * is being edited or dragged, and when it last heard back.
+ */
+/** Only the fallback rate: the stream is what keeps the page current. */
+const POLL_MS = 2000;
+const el = (id) => document.getElementById(id);
+
+// Which queue is in view: the URL wins, so a tab can be left on one queue;
+// otherwise the last one picked here, because this machine runs several Claude
+// sessions at once and the newest queue with work is not always the wanted one.
+const REMEMBERED = "queue-board-session";
+const remembered = () => {
+    try { return localStorage.getItem(REMEMBERED) || ""; } catch { return ""; }
+};
+const remember = (id) => {
+    try { localStorage.setItem(REMEMBERED, id); } catch { /* private window: the URL still works */ }
+};
+
+let chosen = new URLSearchParams(location.search).get("session") || remembered();
+/** When the server was last heard from at all, and when the queue last moved.
+    They are different questions: a quiet queue still beats. */
+let lastSeen = 0;
+let lastChange = 0;
+let lastUpdated = "";
+/** The last state, split the way the list draws it, so the page can redraw
+    itself - unfolding the finished ones, opening an editor - without asking the
+    server for something it already has. */
+/** The item the queue has handed over, whether or not work has begun on it:
+    the row that shows as Claimed or as Running. */
+let active = null;
+let pending = [];
+let finished = [];
+/** Folded away by default: the point of opening the page is what happens next,
+    not what already did. */
+let showFinished = false;
+/** The item open in an editor, and the row being dragged: while either is set
+    the list is left alone, so an update cannot pull the ground from under it. */
+let editing = null;
+let dragging = null;
+
+const escape = (value) => String(value ?? "").replace(/[&<>"]/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]
+));
+
+/** A count of seconds as a person would say it. */
+const spell = (raw) => {
+    const seconds = Math.max(0, Math.round(raw));
+    if (seconds < 60) { return `${seconds}s`; }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) { return `${minutes}m ${seconds % 60}s`; }
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+};
+
+const since = (stamp) => (stamp ? spell((Date.now() - new Date(stamp).getTime()) / 1000) : "");
+
+const showError = (message) => {
+    const box = el("error");
+    box.textContent = message;
+    box.classList.toggle("shown", Boolean(message));
+};
+
+/**
+ * Every change goes through here: post it, then draw what came back. The whole
+ * state is the answer to a write, so the page never renders what it assumed
+ * would happen - the session being watched may have claimed an item in the
+ * same moment.
+ */
+const change = async (path, body) => {
+    try {
+        const response = await fetch(path, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session: chosen, ...body })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            showError(payload.error || response.statusText);
+            await poll();
+            return false;
+        }
+        showError("");
+        took(payload);
+        return true;
+    } catch {
+        showError("Cannot reach the queue server.");
+        return false;
+    }
+};
+
+const shortSession = (id) => (id && id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id || "");
+
+/** One line in the picker: what is in that queue, and how long ago it moved. */
+const sessionLabel = (session) => {
+    const parts = [];
+    if (session.in_progress) { parts.push("running"); }
+    if (session.pending) { parts.push(`${session.pending} pending`); }
+    if (!parts.length) { parts.push(`${session.total} done`); }
+    return `${shortSession(session.session_id)} - ${parts.join(", ")} - ${since(session.updated)} ago`;
+};
+
+const drawSessions = (sessions, current) => {
+    const picker = el("session");
+    // Rebuilding the options on every update would close the dropdown under the
+    // pointer, so it is only redrawn when the set of queues actually changes.
+    const signature = sessions.map((s) => `${s.session_id}:${s.pending}:${s.in_progress}`).join("|") + `#${current}`;
+    if (picker.dataset.signature === signature) { return; }
+    picker.dataset.signature = signature;
+    if (!sessions.length) {
+        picker.innerHTML = '<option value="">no queues yet</option>';
+        return;
+    }
+    // This machine accumulates a queue per Claude session, and almost all of
+    // them are finished history. The ones with work come first, under their
+    // own heading, so the live one is never hunted for.
+    const group = (title, list) => (list.length ? `<optgroup label="${escape(title)}">` + list.map((s) => `
+        <option value="${escape(s.session_id)}"${s.session_id === current ? " selected" : ""}>${escape(sessionLabel(s))}</option>`
+    ).join("") + "</optgroup>" : "");
+    const live = sessions.filter((s) => s.pending || s.in_progress);
+    const rest = sessions.filter((s) => !s.pending && !s.in_progress);
+    picker.innerHTML = group("With work", live) + group("Finished", rest);
+};
+
+/** The only thing on the page that moves, and only while something is running. */
+const drawWorking = (item) => {
+    el("working").classList.toggle("on", Boolean(item));
+};
+
+/**
+ * What to call a row's state. The queue itself only knows whether an item has
+ * been taken; taken is not the same as being worked on, and when the work goes
+ * to a subagent the gap between them is long enough to sit and wonder about.
+ * An item claimed before the queue recorded that difference has no time on it,
+ * and reads as claimed, which is all anyone can honestly say about it.
+ */
+const stateOf = (item) => {
+    if (item.status === "done") { return "finished"; }
+    if (item.status === "failed") { return "failed"; }
+    if (item.status === "in_progress") { return item.running ? "running" : "claimed"; }
+    return "waiting";
+};
+
+const STATE_WORD = {
+    waiting: "Waiting",
+    claimed: "Claimed",
+    running: "Running",
+    finished: "Finished",
+    failed: "Failed"
+};
+
+/* The marks themselves are drawn by the stylesheet (see .state .sym::before), so
+   a copy of the page reads "Waiting", not a glyph glued to a word. Only the
+   running mark is an element, because it moves. */
+const STATE_SYMBOL = {
+    waiting: "",
+    claimed: "",
+    running: '<span class="live" aria-hidden="true"></span>',
+    finished: "",
+    failed: ""
+};
+
+/** How long the row has been where it is: a live one so far, a finished one
+    how long it took from being claimed to being done. */
+const timeOf = (item, state) => {
+    if (state === "running") { return since(item.running || item.started); }
+    if (state === "claimed") { return since(item.started); }
+    if (!item.started || !item.finished) { return ""; }
+    return spell((new Date(item.finished) - new Date(item.started)) / 1000);
+};
+
+const taskRow = (item) => {
+    const state = stateOf(item);
+    const waiting = state === "waiting";
+    const live = state === "running" || state === "claimed";
+    return `
+    <tr class="${state}" data-id="${item.id}"${waiting ? ' data-pending="1"' : ""}>
+        <td class="col-grip">${waiting ? '<span class="grip" aria-hidden="true">&#8942;&#8942;</span>' : ""}</td>
+        <td class="col-state">
+            <span class="state ${state}"><span class="sym" aria-hidden="true">${STATE_SYMBOL[state]}</span>${STATE_WORD[state]}</span>
+        </td>
+        <td class="col-id">#${item.id}</td>
+        <td class="col-task">
+            <span class="text"${waiting ? ` data-edit="${item.id}" title="Click to edit"` : ""}>${escape(item.text)}</span>
+            ${item.result ? `<div class="result">${escape(item.result)}</div>` : ""}
+        </td>
+        <td class="col-mode">${escape(item.mode)}</td>
+        <td class="col-time"${live ? ' id="elapsed"' : ""}>${timeOf(item, state)}</td>
+        <td class="col-do">${waiting ? `
+            <span class="row-actions">
+                <button type="button" data-edit="${item.id}" title="Edit this task">Edit</button>
+                <button type="button" class="drop" data-remove="${item.id}" title="Remove from the queue">&times;</button>
+            </span>` : ""}
+        </td>
+    </tr>`;
+};
+
+const editorRow = (item) => `
+    <tr data-id="${item.id}">
+        <td class="col-grip"></td>
+        <td class="col-state">
+            <span class="state waiting"><span class="sym" aria-hidden="true">&#183;</span>Waiting</span>
+        </td>
+        <td class="col-id">#${item.id}</td>
+        <td colspan="4">
+            <span class="editor">
+                <textarea id="edit-text">${escape(item.text)}</textarea>
+                <span class="buttons">
+                    <button type="button" class="primary" data-save="${item.id}">Save</button>
+                    <button type="button" data-cancel="1">Cancel</button>
+                    <span class="hint">Enter saves, Shift+Enter for a new line, Esc cancels</span>
+                </span>
+            </span>
+        </td>
+    </tr>`;
+
+const foldRow = (count) => `
+    <tr class="fold${showFinished ? " open" : ""}" data-toggle="1">
+        <td class="col-grip"><span class="caret" aria-hidden="true">&#9656;</span></td>
+        <td colspan="6">${count} finished</td>
+    </tr>`;
+
+/**
+ * Everything the table is drawn from. Compared before touching the DOM, because
+ * a rebuild throws away the scroll position, whatever is under the pointer, the
+ * row that was half-hovered and any text the reader had selected - and most
+ * payloads change nothing this page shows: a beat, another queue's counts, the
+ * same state sent twice.
+ */
+const listSignature = () => JSON.stringify([
+    showFinished,
+    editing,
+    active && [active.id, active.text, active.mode, active.started, active.running],
+    finished.map((i) => [i.id, i.status, i.text, i.result, i.mode, i.started, i.finished]),
+    pending.map((i) => [i.id, i.text, i.mode])
+]);
+
+const HEAD = `
+    <thead>
+        <tr>
+            <th class="col-grip"></th>
+            <th class="col-state">State</th>
+            <th class="col-id">#</th>
+            <th class="col-task">Task</th>
+            <th class="col-mode">Mode</th>
+            <th class="col-time">Time</th>
+            <th class="col-do"></th>
+        </tr>
+    </thead>`;
+
+let drawn = "";
+
+/**
+ * One table, in the order the work happened and will happen: what is done (out
+ * of the way until asked for), then what has been taken, then what is waiting.
+ */
+const drawList = () => {
+    const signature = listSignature();
+    if (signature === drawn) { return; }
+    drawn = signature;
+    const rows = [];
+    if (finished.length) { rows.push(foldRow(finished.length)); }
+    if (showFinished) { rows.push(...finished.map(taskRow)); }
+    if (active) { rows.push(taskRow(active)); }
+    rows.push(...pending.map((item) => (item.id === editing ? editorRow(item) : taskRow(item))));
+    el("list").innerHTML = rows.length
+        ? `<table class="queue">${HEAD}<tbody>${rows.join("")}</tbody></table>`
+        : '<div class="empty">Nothing queued.</div>';
+    if (editing !== null) {
+        const box = el("edit-text");
+        if (box) {
+            box.focus();
+            box.setSelectionRange(box.value.length, box.value.length);
+        }
+    }
+};
+
+const render = (state) => {
+    drawSessions(state.sessions || [], chosen);
+    const items = state.items || [];
+    active = items.find((i) => i.status === "in_progress") || null;
+    drawWorking(active);
+    // Finished in the order they finished, which is not always the order they
+    // were queued in: an item can be dropped from the middle of the list.
+    finished = items
+        .filter((i) => i.status === "done" || i.status === "failed")
+        .sort((a, b) => String(a.finished || "").localeCompare(String(b.finished || "")));
+    pending = items.filter((i) => i.status === "pending");
+    // A row being typed into or dragged holds the whole list still, or the text
+    // under the cursor would be replaced by the server's copy of it mid-word.
+    // Everything outside the list - the working icon, the footer - keeps up.
+    if (editing === null && dragging === null) {
+        drawList();
+    }
+};
+
+/** A gap longer than two heartbeats means nothing is answering, not that
+    nothing is happening. */
+const DEAD_MS = 35000;
+
+const drawFooter = () => {
+    const foot = el("footer");
+    if (!lastSeen || Date.now() - lastSeen > DEAD_MS) {
+        foot.innerHTML = '<span class="stale">Not hearing from the queue server. Is it still running?</span>';
+        return;
+    }
+    foot.textContent = lastChange
+        ? `Updated ${since(new Date(lastChange).toISOString())} ago`
+        : "Waiting for the queue";
+};
+
+/**
+ * The page opens without naming a queue, and the server answers with the one it
+ * thinks is live. From that first answer on, the page asks for that queue by
+ * name - in its requests, in the URL and in what it remembers - so nothing can
+ * move it onto another session's list while it is being read.
+ */
+const pin = (id) => {
+    if (!id || id === chosen) { return false; }
+    chosen = id;
+    remember(chosen);
+    const url = new URL(location.href);
+    url.searchParams.set("session", chosen);
+    history.replaceState(null, "", url);
+    return true;
+};
+
+/** One place to record that a state payload arrived, however it arrived. */
+const took = (state) => {
+    lastSeen = Date.now();
+    if (state.updated !== lastUpdated) {
+        lastUpdated = state.updated || "";
+        lastChange = lastSeen;
+    }
+    // Named before drawing, and the stream reopened on the name, so the server
+    // holds this queue for the life of that connection too.
+    const pinned = pin(state.session_id);
+    render(state);
+    drawFooter();
+    if (pinned) { listen(); }
+};
+
+/**
+ * The queue, pushed as it changes. EventSource reconnects by itself, which is
+ * also what carries the page across a restart of the server: it goes quiet for
+ * a moment and then carries on, because the queue lives in files and not in
+ * the process.
+ */
+let stream = null;
+let streamOk = false;
+
+const listen = () => {
+    if (!window.EventSource) { return; }
+    if (stream) { stream.close(); }
+    stream = new EventSource(`/api/events${chosen ? `?session=${encodeURIComponent(chosen)}` : ""}`);
+    stream.onmessage = (event) => {
+        streamOk = true;
+        took(JSON.parse(event.data));
+    };
+    // The queue can be quiet for a long time; a beat says the line is open.
+    stream.addEventListener("beat", () => {
+        streamOk = true;
+        lastSeen = Date.now();
+        drawFooter();
+    });
+    stream.onerror = () => {
+        // The browser is already reconnecting; say so rather than doing
+        // anything about it, and let the slow poll cover the gap.
+        streamOk = false;
+        drawFooter();
+    };
+};
+
+const poll = async () => {
+    // An update in the middle of a drag would rebuild the row under the pointer.
+    if (dragging !== null) { return; }
+    try {
+        const response = await fetch(`/api/state${chosen ? `?session=${encodeURIComponent(chosen)}` : ""}`);
+        if (!response.ok) { throw new Error(response.statusText); }
+        took(await response.json());
+    } catch {
+        drawFooter();
+    }
+};
+
+// --- changing the queue -------------------------------------------------------
+
+el("add").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const box = el("add-text");
+    const text = box.value.trim();
+    if (!text) { return; }
+    if (await change("/api/add", { text, mode: el("add-mode").value })) {
+        box.value = "";
+    }
+    box.focus();
+});
+
+const saveEdit = async () => {
+    const box = el("edit-text");
+    if (!box || editing === null) { return; }
+    const id = editing;
+    const text = box.value.trim();
+    editing = null;
+    // Emptying the box is not a way to delete a task; that is what the x is for.
+    if (text) { await change("/api/edit", { id, text }); } else { await poll(); }
+};
+
+const cancelEdit = () => {
+    editing = null;
+    drawList();
+};
+
+el("list").addEventListener("click", async (event) => {
+    const element = elementAt(event);
+    const target = element && element.closest("[data-edit], [data-remove], [data-save], [data-cancel], [data-toggle]");
+    if (!target) { return; }
+    // Unfolding the finished ones and opening an editor are both about how the
+    // page is drawn, not about what is in the queue, so they redraw from what
+    // is already here rather than going back to the server for it.
+    if (target.dataset.toggle) {
+        showFinished = !showFinished;
+        drawList();
+    } else if (target.dataset.remove) {
+        await change("/api/remove", { id: Number(target.dataset.remove) });
+    } else if (target.dataset.save) {
+        await saveEdit();
+    } else if (target.dataset.cancel) {
+        cancelEdit();
+    } else if (target.dataset.edit) {
+        // Selecting a task's words ends in a click on it. That is someone
+        // copying the text out, not asking to rewrite it, and swapping the
+        // words for a textarea under their cursor loses the selection.
+        if (target.tagName !== "BUTTON" && !window.getSelection().isCollapsed) { return; }
+        editing = Number(target.dataset.edit);
+        drawList();
+    }
+});
+
+el("list").addEventListener("keydown", async (event) => {
+    if (editing === null) { return; }
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        await saveEdit();
+    } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelEdit();
+    }
+});
+
+// --- dragging to reorder ------------------------------------------------------
+
+/** Only the waiting rows move: the finished ones are history and the one that
+    has been taken is already somebody's business. */
+/**
+ * The waiting row an event landed in, or null. The target is not always an
+ * element: press on text that is already selected and the browser starts a
+ * drag of the selection itself, whose events carry the text node - and a text
+ * node has no closest(). That drag is not ours and must simply be ignored.
+ */
+const elementAt = (event) => {
+    const node = event.target;
+    return node instanceof Element ? node : (node && node.parentElement) || null;
+};
+
+const rowAt = (event) => {
+    const element = elementAt(event);
+    return element ? element.closest("tr[data-pending]") : null;
+};
+
+/** Which row the pointer is over, and which half of it. */
+const dropAt = (event) => {
+    const row = rowAt(event);
+    if (!row) { return null; }
+    const box = row.getBoundingClientRect();
+    return { id: Number(row.dataset.id), below: event.clientY > box.top + box.height / 2 };
+};
+
+const clearMarks = () => {
+    el("list").querySelectorAll("tr").forEach((row) => row.classList.remove("over", "over-below"));
+};
+
+/**
+ * A row becomes draggable only while the grip is held.
+ *
+ * It used to be draggable all the time, and that quietly cost the page its
+ * text: Chrome leaves a draggable element out of a select-all altogether, and
+ * dragging across one moves the row instead of selecting the words. Measured on
+ * a four row queue: Ctrl+A returned 54 characters, all of them from the one row
+ * that was not draggable. Setting the flag on mousedown is in time for the drag
+ * that follows, and clearing it afterwards gives the row back to the reader.
+ */
+const dropDraggable = () => {
+    el("list").querySelectorAll("tr[draggable]").forEach((row) => row.removeAttribute("draggable"));
+};
+
+el("list").addEventListener("mousedown", (event) => {
+    const element = elementAt(event);
+    const row = element && element.closest(".grip") && rowAt(event);
+    if (row && editing === null) { row.draggable = true; }
+});
+
+document.addEventListener("mouseup", dropDraggable);
+
+el("list").addEventListener("dragstart", (event) => {
+    const row = rowAt(event);
+    if (!row || editing !== null) { return; }
+    dragging = Number(row.dataset.id);
+    row.classList.add("dragging");
+    event.dataTransfer.effectAllowed = "move";
+    // Firefox starts a drag only when something has been set on it.
+    event.dataTransfer.setData("text/plain", row.dataset.id);
+});
+
+el("list").addEventListener("dragover", (event) => {
+    if (dragging === null) { return; }
+    const row = rowAt(event);
+    if (!row) { return; }
+    event.preventDefault();
+    clearMarks();
+    const box = row.getBoundingClientRect();
+    row.classList.add(event.clientY > box.top + box.height / 2 ? "over-below" : "over");
+});
+
+el("list").addEventListener("drop", async (event) => {
+    if (dragging === null) { return; }
+    event.preventDefault();
+    const target = dropAt(event);
+    const held = dragging;
+    dragging = null;
+    clearMarks();
+    if (target === null || target.id === held) { await poll(); return; }
+    // The order the server is given is the whole pending order, so it either
+    // takes the list the user is looking at or refuses it as stale.
+    const ids = pending.map((item) => item.id).filter((id) => id !== held);
+    const at = ids.indexOf(target.id) + (target.below ? 1 : 0);
+    ids.splice(at < 0 ? ids.length : at, 0, held);
+    await change("/api/reorder", { ids });
+});
+
+el("list").addEventListener("dragend", async () => {
+    dropDraggable();
+    if (dragging === null) { return; }
+    dragging = null;
+    clearMarks();
+    await poll();
+});
+
+el("session").addEventListener("change", (event) => {
+    chosen = event.target.value;
+    remember(chosen);
+    editing = null;
+    // A different queue is a different list, even if it happened to look the same.
+    drawn = "";
+    // The queue in view belongs in the URL, so a tab can be left on one.
+    const url = new URL(location.href);
+    url.searchParams.set("session", chosen);
+    history.replaceState(null, "", url);
+    listen();
+    void poll();
+});
+
+// The elapsed time ticks between updates, so the live row never looks frozen.
+setInterval(() => {
+    const clock = el("elapsed");
+    if (clock && active) { clock.textContent = timeOf(active, stateOf(active)); }
+    drawFooter();
+}, 1000);
+
+void poll();
+listen();
+// The stream does the work; this is the net under it, for a browser without
+// EventSource and for the seconds after a server restart when the page has not
+// been reconnected yet.
+setInterval(() => {
+    if (!streamOk) { void poll(); }
+}, POLL_MS);
+</script>
+</body>
+</html>

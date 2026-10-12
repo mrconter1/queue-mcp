@@ -17,7 +17,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from queue_mcp import store
+from queue_mcp import store, web
 
 HOST = os.environ.get("QUEUE_MCP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("QUEUE_MCP_PORT", "8766"))
@@ -26,9 +26,10 @@ server = MCPServer(
     "queue",
     instructions=(
         "Per-session task queue. Work items through it one at a time: call "
-        "queue_next to claim the next item, do the work (spawn a forked "
-        "subagent when the item's mode is 'fork'), then call queue_complete "
-        "before claiming the next. Stop when queue_next returns nothing. "
+        "queue_next to claim the next item, call queue_running as the work "
+        "actually starts (spawn a forked subagent when the item's mode is "
+        "'fork'), then call queue_complete before claiming the next. Stop when "
+        "queue_next returns nothing. "
         "Always pass the current Claude Code session id as session_id. "
         "queue_history answers what has already been processed, across all "
         "sessions, including items that were dropped before they ran."
@@ -54,7 +55,7 @@ def queue_add(session_id: str, text: str, mode: str = "fork", position: int | No
     """
     try:
         return _ok(item=store.add(session_id, text, mode, position))
-    except (ValueError, TimeoutError) as exc:
+    except (ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -76,11 +77,26 @@ def queue_next(session_id: str) -> dict[str, Any]:
     """
     try:
         item = store.claim_next(session_id)
-    except (ValueError, TimeoutError) as exc:
+    except (ValueError, OSError) as exc:
         return _err(str(exc))
     if item is None:
         return _ok(item=None, drained=True)
     return _ok(item=item, drained=False)
+
+
+@server.tool()
+def queue_running(session_id: str, item_id: int) -> dict[str, Any]:
+    """Say that work on a claimed item has actually started.
+
+    queue_next claims an item, which is not the same as working on it: when the
+    work goes to a subagent, call this as the worker is launched. The board
+    shows the difference as Claimed and Running, so somebody watching can tell
+    a handover from a hold-up. Saying it twice is harmless.
+    """
+    try:
+        return _ok(item=store.mark_running(session_id, item_id))
+    except (KeyError, ValueError, OSError) as exc:
+        return _err(str(exc))
 
 
 @server.tool()
@@ -97,7 +113,7 @@ def queue_complete(session_id: str, item_id: int, result: str = "", failed: bool
     """Mark an item done (or failed) and record a short result summary."""
     try:
         return _ok(item=store.finish(session_id, item_id, result, failed))
-    except (KeyError, ValueError, TimeoutError) as exc:
+    except (KeyError, ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -106,7 +122,16 @@ def queue_remove(session_id: str, item_id: int) -> dict[str, Any]:
     """Drop an item from the queue entirely."""
     try:
         return _ok(item=store.remove(session_id, item_id))
-    except (KeyError, ValueError, TimeoutError) as exc:
+    except (KeyError, ValueError, OSError) as exc:
+        return _err(str(exc))
+
+
+@server.tool()
+def queue_edit(session_id: str, item_id: int, text: str | None = None, mode: str | None = None) -> dict[str, Any]:
+    """Reword a queued item, or change how it runs. Finished items cannot be edited."""
+    try:
+        return _ok(item=store.edit(session_id, item_id, text, mode))
+    except (KeyError, ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -115,7 +140,7 @@ def queue_move(session_id: str, item_id: int, position: int) -> dict[str, Any]:
     """Reorder an item; position 0 puts it next."""
     try:
         return _ok(item=store.move(session_id, item_id, position))
-    except (KeyError, ValueError, TimeoutError) as exc:
+    except (KeyError, ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -124,7 +149,7 @@ def queue_clear(session_id: str, finished_only: bool = True) -> dict[str, Any]:
     """Remove finished items, or everything when finished_only is false."""
     try:
         return _ok(removed=store.clear(session_id, finished_only))
-    except (ValueError, TimeoutError) as exc:
+    except (ValueError, OSError) as exc:
         return _err(str(exc))
 
 
@@ -157,8 +182,14 @@ def queue_sessions() -> dict[str, Any]:
     return _ok(sessions=store.sessions(), last=store.last_session())
 
 
+# The board rides on the same app, so there is one process and one port: the
+# tools answer on /mcp, a browser gets the queue on /.
+web.attach(server)
+
+
 def main() -> None:
     print(f"queue-mcp listening on http://{HOST}:{PORT}/mcp  (data: {store.ROOT})")
+    print(f"           board on http://{HOST}:{PORT}/")
     # The selector loop, not ``server.run``: Python's default Windows loop, the
     # Proactor, closes its listening socket when a client resets a connection
     # before the accept completes (WinError 64), and the process then lives on
