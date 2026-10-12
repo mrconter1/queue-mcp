@@ -15,6 +15,7 @@ import asyncio
 import os
 from typing import Any
 
+import uvicorn
 from mcp.server.mcpserver import MCPServer
 
 from queue_mcp import store, web
@@ -196,10 +197,18 @@ def main() -> None:
     # answering nothing. That killed this server on every Claude Code session
     # churn for a month. The selector loop drops the aborted connection and
     # carries on; nothing here needs the Proactor (no asyncio subprocesses).
-    asyncio.run(
-        server.run_streamable_http_async(host=HOST, port=PORT),
-        loop_factory=asyncio.SelectorEventLoop,
+    # Our own uvicorn.Config rather than ``run_streamable_http_async``, only
+    # to turn the access log off: one line per request was nearly all of a log
+    # the orchestrator can only rotate between restarts. Startup lines and
+    # errors still land in it.
+    config = uvicorn.Config(
+        server.streamable_http_app(host=HOST),
+        host=HOST,
+        port=PORT,
+        log_level=server.settings.log_level.lower(),
+        access_log=False,
     )
+    asyncio.run(uvicorn.Server(config).serve(), loop_factory=asyncio.SelectorEventLoop)
 
 
 if __name__ == "__main__":
