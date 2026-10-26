@@ -150,3 +150,14 @@ choice is kept in the URL, so a tab can be left on one queue.
   would make it strict.
 
 Config: `QUEUE_MCP_PORT`, `QUEUE_MCP_HOST`, `QUEUE_MCP_HOME`.
+
+## Optional bearer token on /mcp
+
+Set `MCP_QUEUE_TOKEN_FILE` to a file path to lock the `/mcp` endpoint to callers that
+send `Authorization: Bearer <token>` with a local Host. The file holds the
+token DPAPI-encrypted for the current Windows user and is created on first
+start if missing; a file that exists but cannot be decrypted locks the
+endpoint (503). Unset, the server behaves exactly as before. Claude Code sends
+the header through a `headersHelper` that decrypts the same file, so the
+token never sits in plain text in `~/.claude.json`. Same design as the
+orchestrator's `guard.py`.

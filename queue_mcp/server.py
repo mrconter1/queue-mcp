@@ -18,7 +18,7 @@ from typing import Any
 import uvicorn
 from mcp.server.mcpserver import MCPServer
 
-from queue_mcp import store, web
+from queue_mcp import guard, store, web
 
 HOST = os.environ.get("QUEUE_MCP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("QUEUE_MCP_PORT", "8766"))
@@ -202,7 +202,7 @@ def main() -> None:
     # the orchestrator can only rotate between restarts. Startup lines and
     # errors still land in it.
     config = uvicorn.Config(
-        server.streamable_http_app(host=HOST),
+        guard.wrap(server.streamable_http_app(host=HOST)),
         host=HOST,
         port=PORT,
         log_level=server.settings.log_level.lower(),
